@@ -2,6 +2,10 @@ defmodule Siplane.User do
   use Ecto.Schema
   import Ecto.Changeset
 
+  def log_event(event) do
+    # nada
+  end
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "users" do
@@ -52,5 +56,19 @@ defmodule Siplane.User.UserProvider do
     |> cast_assoc(:user, with: &Siplane.User.changeset/2)
     |> validate_required([:user, :provider, :token])
     |> unique_constraint([:user, :provider])
+  end
+end
+
+defmodule Siplane.User.LogEvent do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @primary_key false
+  @foreign_key_type :binary_id
+  schema "log_event_users" do
+    belongs_to :log_event, Siplane.Log
+    belongs_to :user, Siplane.User
+
+    field :user_visible, :boolean
   end
 end

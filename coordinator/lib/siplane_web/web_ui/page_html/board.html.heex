@@ -1,0 +1,14 @@
+<%= if @board.image_url do %>
+<img class="h-auto max-w-full rounded-lg px-2 pb-2 pt-4 mb-4" src={@board.image_url} alt="">
+<% end %>
+<%= if @board.runner_connected do %>
+✔
+<% else %>
+✘
+<% end %>
+<h2 class="pb-2 text-xl"><%= @board.label %></h2>
+<p><%= @board.manufacturer %> <%= @board.model %></p>
+<%= if @board.hwrev do %>
+<p>Hardware revision: <%= @board.hwrev %></p>
+<% end %>
+<p>Location: <%= @board.location %></p>

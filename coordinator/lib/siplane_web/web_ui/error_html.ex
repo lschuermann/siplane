@@ -1,12 +1,12 @@
-defmodule SiplaneWeb.ErrorHTML do
+defmodule SiplaneWeb.WebUI.ErrorHTML do
   use SiplaneWeb, :html
 
   # If you want to customize your error pages,
   # uncomment the embed_templates/1 call below
   # and add pages to the error directory:
   #
-  #   * lib/siplane_web/controllers/error_html/404.html.heex
-  #   * lib/siplane_web/controllers/error_html/500.html.heex
+  #   * lib/siplane_web/web_ui/error_html/404.html.heex
+  #   * lib/siplane_web/web_ui/error_html/500.html.heex
   #
   # embed_templates "error_html/*"
 

@@ -2,6 +2,20 @@ defmodule Siplane.Repo.Migrations.Init do
   use Ecto.Migration
 
   def change do
+    # Log events relate to different entities, which we keep in individual
+    # relations. These relations also define whether a given log entry should be
+    # visible to those entities.
+    create table(:log_events, primary_key: false) do
+      add :id, :binary_id, primary_key: true
+      add :severity, :int, null: false
+      add :event_type, :string, null: false
+      add :event_version, :string, null: false
+      add :message, :string, null: false
+      add :data, :map
+
+      timestamps(type: :utc_datetime)
+    end
+
     create table(:users, primary_key: false) do
       add :id, :binary_id, primary_key: true, null: false
       add :name, :string, null: false
@@ -15,6 +29,12 @@ defmodule Siplane.Repo.Migrations.Init do
 
     create unique_index(:users, [:email])
 
+    create table(:log_event_users, primary_key: false) do
+      add :log_event_id, references(:log_events, type: :binary_id), primary_key: true
+      add :user_id, references(:users, type: :binary_id), primary_key: true
+      add :user_visible, :bool, null: false
+    end
+
     create table(:user_ssh_keys, primary_key: false) do
       add :id, :binary_id, primary_key: true, null: false
       add :user_id, references(:users, type: :binary_id), null: false
@@ -27,7 +47,7 @@ defmodule Siplane.Repo.Migrations.Init do
       # References to import sources
       add :github_ssh_key_id, :int
 
-      timestamps(type: utc_datetime)
+      timestamps(type: :utc_datetime)
     end
 
     create unique_index(:user_ssh_keys, [:type, :binary_key])
@@ -53,6 +73,17 @@ defmodule Siplane.Repo.Migrations.Init do
       timestamps(type: :utc_datetime)
     end
 
+    create table(:log_event_boards, primary_key: false) do
+      add :log_event_id, references(:log_events, type: :binary_id), primary_key: true
+      add :board_id, references(:boards, type: :binary_id), primary_key: true
+
+      add :public, :bool, null: false
+      # TODO: this should capture the owners at the time that this was logged,
+      # and individually be able to control whether it is visible for just the
+      # current owners, past owners, or both.
+      add :owner_visible, :bool, null: false
+    end
+
     create table(:board_owners, primary_key: false) do
       add :board_id, references(:boards, type: :binary_id), primary_key: true
       add :user_id, references(:users, type: :binary_id), primary_key: true
@@ -60,15 +91,5 @@ defmodule Siplane.Repo.Migrations.Init do
       timestamps(type: :utc_datetime)
     end
 
-    # A log entry relates to different entities
-    create table(:log, primary_key: false) do
-      add :id, :binary_id, primary_key: true
-      add :event_type, :string
-      add :event_version, :string
-      add :message, :string
-      add :data, :map
-
-      timestamps(type: :utc_datetime)
-    end
   end
 end
