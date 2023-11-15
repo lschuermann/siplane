@@ -12,3 +12,10 @@
 <p>Hardware revision: <%= @board.hwrev %></p>
 <% end %>
 <p>Location: <%= @board.location %></p>
+
+<h2 class="pb-2 text-l">Log</h2>
+<ul>
+<%= for message <- @log_events do %>
+<li><%= message.message %></li>
+<% end %>
+</ul>

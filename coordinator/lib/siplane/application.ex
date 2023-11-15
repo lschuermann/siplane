@@ -31,8 +31,10 @@ defmodule Siplane.Application do
 
       # ##### Business logic
 
-      # Start a registry for board orchestrators managing runner connections & boards generally
-      {Registry, keys: :unique, name: Siplane.BoardOrchestrator.Registry},
+      # Start a registry for boards and their server processes. This
+      # is also used as a PubSub mechanism to subscribe to
+      # board-related events.
+      Siplane.Board,
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -48,4 +50,17 @@ defmodule Siplane.Application do
     SiplaneWeb.Endpoint.config_change(changed, removed)
     :ok
   end
+
+  # Move this somewhere else!
+  def insert_dummy_data() do
+    Siplane.Repo.insert!(%Siplane.Board{
+	  label: "Test nRF52840DK",
+	  location: "Princeton University",
+	  manufacturer: "Nordic Semiconductor",
+	  model: "nRF52840DK",
+	  runner_token: "foobar",
+	  image_url: "https://www.nordicsemi.com/-/media/Images/Products/DevKits/nRF52-Series/nRF52840-DK/nRF52840-DK-promo.png?sc_lang=en",
+   })
+  end
 end
+

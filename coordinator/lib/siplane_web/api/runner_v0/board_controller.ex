@@ -19,10 +19,10 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
 	)
 
       {:ok, parsed_board_id} ->
+	board_id = Keyword.get(parsed_board_id, :binary)
+
 	# TODO: check that this board actually exist and validate the
 	# token provided by the runner...
-	{:ok, orch_pid} = Keyword.get(parsed_board_id, :binary)
-  	|> Siplane.BoardOrchestrator.get_or_start()
 
 	# TODO: validate the auth connection
 
@@ -34,33 +34,43 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
 
 	# Register this request handler process as a connection for
 	# this runner to the orchestrator:
-	{:ok, last_will_and_testament} =
-	  Siplane.BoardOrchestrator.connect_runner orch_pid
+	{:ok, board_pid, last_will_and_testament} =
+	  Siplane.Board.connect_runner board_id, %{
+	    ip: "TODO get client IP",
+	    port: 1234,
+	  }
+
+	# send(board_pid, nil)
+
+	# We want to close the SSE connection when the board server
+	# dies. Thus monitor this process. This will still deliver a
+	# message even if the process is already dead:
+	Process.monitor board_pid
 
 	# Receive runner messages and forward them to SSE in a loop:
-	sse_loop conn, orch_pid, last_will_and_testament
+	sse_loop conn, board_pid, board_id, last_will_and_testament
     end
   end
 
-  defp sse_loop(conn, orch_pid, last_will_and_testament) do
+  defp sse_loop(conn, board_pid, board_id, last_will_and_testament) do
     cont = receive do
-      {:runner_conn, {^orch_pid, _}, :msg, msg} ->
+      {:board_event, ^board_id, :runner_msg, msg} ->
 	# Send message:
 	chunk(conn, "event: message\ndata: #{Jason.encode! msg}\n\n")
 	true
 
-      {:DOWN, _ref, :process, ^orch_pid, _type} ->
+      {:DOWN, _ref, :process, ^board_pid, _type} ->
 	# When the orchestrator goes down, we should close SSE
 	chunk(conn, "event: close\ndata: #{Jason.encode! last_will_and_testament}\n\n")
 	false
 
-      other ->
+      _other ->
 	# Ignore any unrelated messages:
 	true
     end
 
     if cont do
-      sse_loop conn, orch_pid, last_will_and_testament
+      sse_loop conn, board_pid, board_id, last_will_and_testament
     else
       conn
     end

@@ -16,23 +16,39 @@
         GitHub
       </a>
 
+      <!--
+	  This template is reused across both Phoenix LiveView and
+         regular Plug-handled pages. Thus, the session information is
+         stored in different assigns and must be accessed
+         differently. TODO: is there a more elegant version to do
+         this?  Either use compatible assigns or assign variables in
+         this template accordingly.
+	-->
       <%= if assigns[:user] do %>
-        <a href="/user" class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
-	  <%= @user.name %>
-          <span aria-hidden="true">&rarr;</span>
-        </a>
+      <a href="/user" class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
+	<%= @user.name %>
+        <span aria-hidden="true">&rarr;</span>
+      </a>
       <%= else %>
-        <%= if assigns[:conn] && @conn.assigns[:user] do %>
-        <a href="/user" class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
-	  <%= @conn.assigns[:user].name %>
-          <span aria-hidden="true">&rarr;</span>
-        </a>
+      <%= if assigns[:conn] && @conn.assigns[:user] do %>
+      <a href="/user" class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
+	<%= @conn.assigns[:user].name %>
+        <span aria-hidden="true">&rarr;</span>
+      </a>
       <% else %>
-        <a href={"/auth/github?#{URI.encode_query(%{redirect_url: Phoenix.Controller.current_url(@conn)})}"}
-	   class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
-          Login
-          <span aria-hidden="true">&rarr;</span>
-        </a>
+      <%= if assigns[:current_uri] do %>
+      <a href={"/auth/github?#{URI.encode_query(%{redirect_url: assigns[:current_uri]})}"}
+	 class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
+        Login
+        <span aria-hidden="true">&rarr;</span>
+      </a>
+      <% else %>
+      <a href={"/auth/github?#{URI.encode_query(%{redirect_url: Phoenix.Controller.current_url(@conn)})}"}
+	 class="rounded-lg bg-zinc-100 px-2 py-1 hover:bg-zinc-200/80">
+        Login
+        <span aria-hidden="true">&rarr;</span>
+      </a>
+      <% end %>
       <% end %>
       <% end %>
     </div>

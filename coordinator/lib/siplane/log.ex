@@ -1,6 +1,15 @@
 defmodule Siplane.Log do
   use Ecto.Schema
-  import Ecto.Changeset
+  # import Ecto.Changeset
+
+  # TODO: these constants should be automatically inserted into
+  # log-messages using the appropriate methods:
+  def severity_critical, do: 1
+  def severity_error, do: 2
+  def severity_warn, do: 3
+  def severity_info, do: 4
+  def severity_debug, do: 5
+  def severity_trace, do: 6
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
