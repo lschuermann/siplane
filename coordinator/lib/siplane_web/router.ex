@@ -12,7 +12,7 @@ defmodule SiplaneWeb.Router do
   end
 
   pipeline :api do
-    plug :accepts, ["json"]
+    plug :accepts, ["json", "sse"]
   end
 
   scope "/", SiplaneWeb do

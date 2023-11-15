@@ -2,13 +2,15 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
   use SiplaneWeb, :controller
   require Logger
 
+  @sse_keepalive_timeout 15000
+
   def index(conn, _params) do
     # The home page is often custom made,
     # so skip the default app layout.
     send_resp(conn, :ok, "hello!")
   end
 
-  def sse_conn(conn, %{"id" => board_id_str}) do
+  def sse_conn(%{adapter: {Plug.Cowboy.Conn, cowboy_req}} = conn, %{"id" => board_id_str}) do
     case UUID.info(board_id_str) do
       {:error, _} ->
 	conn
@@ -25,6 +27,12 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
 	# token provided by the runner...
 
 	# TODO: validate the auth connection
+
+	# With the token validated, we can set this request to never
+	# time out. We should still limit each board to one open SSE
+	# conn.
+	:cowboy_req.cast({:set_options, %{ idle_timeout: :infinity }}, cowboy_req)
+
 
 	conn = conn
 	|> put_resp_header("Cache-Control", "no-cache")
@@ -47,30 +55,52 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
 	# message even if the process is already dead:
 	Process.monitor board_pid
 
+	# Setup a keep-alive timer for SSE. This timer will be reset
+	# every time a message is sent or the timer fires.
+	timer = Process.send_after(self(), :sse_keepalive, @sse_keepalive_timeout)
+
 	# Receive runner messages and forward them to SSE in a loop:
-	sse_loop conn, board_pid, board_id, last_will_and_testament
+	sse_loop conn, board_pid, board_id, last_will_and_testament, timer
     end
   end
 
-  defp sse_loop(conn, board_pid, board_id, last_will_and_testament) do
-    cont = receive do
+  defp sse_loop(conn, board_pid, board_id, last_will_and_testament, timer) do
+    {cont, timer_action} = receive do
       {:board_event, ^board_id, :runner_msg, msg} ->
 	# Send message:
 	chunk(conn, "event: message\ndata: #{Jason.encode! msg}\n\n")
-	true
+	{true, :reset}
 
       {:DOWN, _ref, :process, ^board_pid, _type} ->
 	# When the orchestrator goes down, we should close SSE
 	chunk(conn, "event: close\ndata: #{Jason.encode! last_will_and_testament}\n\n")
-	false
+	{false, :cancel}
+
+      :sse_keepalive ->
+	chunk(conn, ":\n\n")
+	{true, :reset}
 
       _other ->
 	# Ignore any unrelated messages:
-	true
+	{true, nil}
     end
 
+    timer =
+      case timer_action do
+	:cancel ->
+	  Process.cancel_timer(timer)
+	  timer
+
+      :reset ->
+	  Process.cancel_timer(timer)
+	  Process.send_after(self(), :sse_keepalive, @sse_keepalive_timeout)
+
+	_ ->
+	  timer
+      end
+
     if cont do
-      sse_loop conn, board_pid, board_id, last_will_and_testament
+      sse_loop conn, board_pid, board_id, last_will_and_testament, timer
     else
       conn
     end
