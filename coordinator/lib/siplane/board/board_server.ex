@@ -11,6 +11,12 @@ defmodule Siplane.Board.Server do
   # API is provided by the Siplane.Board module (which manages these servers,
   # plus subscribers to board-related events).
 
+  defp request_runner_status(state) do
+    if !is_nil(state.runner_pid) do
+      send(state.runner_pid, {:board_event, state.board_id, :runner_msg, %{type: :update_state}})
+    end
+  end
+
   # ----- GenServer Implementation ---------------------------------------------
 
   @impl true
@@ -80,6 +86,10 @@ defmodule Siplane.Board.Server do
       }
     )
 
+    state = %{ state | runner_pid: runner_pid, board_state: :unknown }
+
+    request_runner_status(state)
+
     {
       :reply,
       {
@@ -88,10 +98,36 @@ defmodule Siplane.Board.Server do
 	# TODO: craft an appropriate last will and testament message
 	"oops I'm dead!",
       },
-      %{
-	state | runner_pid: runner_pid, board_state: :unknown
-      }
+      state,
     }
+  end
+
+  @impl true
+  def handle_call({:update_state, board_state}, _from, state) do
+    if state.board_state != board_state do
+      Siplane.Log.info(
+	%Siplane.Log{
+	  severity: Siplane.Log.severity_info,
+	  event_type: "board_runner_state_changed",
+	  event_version: "0.1",
+	  message: "Board ${board_id} has changed state from ${old_state} to ${new_state}.",
+	  data: %{
+	    board_id: UUID.binary_to_string!(state.board_id),
+	    old_state: state.board_state,
+	    new_state: board_state,
+	  },
+	  log_event_boards: [
+	    %Siplane.Board.LogEvent{
+	      board_id: Ecto.UUID.load!(state.board_id),
+	      public: true,
+	      owner_visible: true,
+}
+	  ],
+	}
+      )
+    end
+
+    {:reply, :ok, %{ state | board_state: board_state } }
   end
 
   @impl true

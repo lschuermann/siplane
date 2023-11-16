@@ -39,7 +39,7 @@ defmodule SiplaneWeb.Router do
   scope "/api/runner/v0", SiplaneWeb do
     pipe_through :api
 
-    resources "/boards", API.Runner.V0.BoardController
+    put "/boards/:id/state", API.Runner.V0.BoardController, :update_state
     get "/boards/:id/sse", API.Runner.V0.BoardController, :sse_conn
   end
 

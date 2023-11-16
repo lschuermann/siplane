@@ -63,10 +63,6 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
     case UUID.info(board_id_str) do
       {:error, _} ->
 	{:error, :uuid_invalid}
-	# conn
-	# |> put_status(:bad_request)
-	# |> put_view(SiplaneWeb.WebUI.ErrorHTML)
-	# |> render("400.html")
 
       {:ok, parsed_board_id} ->
 	binary_board_id =

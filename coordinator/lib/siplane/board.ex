@@ -56,6 +56,11 @@ defmodule Siplane.Board do
     GenServer.call(pid, {:connect_runner, conn_info})
   end
 
+  def update_state(board_id, status) do
+    pid = get_or_start(board_id)
+    GenServer.call(pid, {:update_state, status})
+  end
+
   # Retrieve a given number of log messages related to boards.
   #
   # When nil == 0, this loads all log messages related to this board.
