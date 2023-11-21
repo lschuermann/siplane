@@ -21,6 +21,7 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
 	case conn.body_params["state"] do
 	  "idle" ->
 	    Siplane.Board.update_state(board_id, :idle)
+	    send_resp(conn, 204, "")
 	end
     end
   end
@@ -120,5 +121,6 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
       conn
     end
   end
+
 
 end

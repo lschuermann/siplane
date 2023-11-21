@@ -13,9 +13,14 @@
 <% end %>
 <p>Location: <%= @board.location %></p>
 
+<h2 class="pb-2 text-l">New Job</h2>
+<.form for={@form} phx-submit="new-job">
+  <button>New Job!</button>
+</.form>
+
 <h2 class="pb-2 text-l">Log</h2>
 <ul>
 <%= for message <- @log_events do %>
-<li><%= message.message %></li>
+<li><%= message.message %>, <%= inspect message.data %></li>
 <% end %>
 </ul>

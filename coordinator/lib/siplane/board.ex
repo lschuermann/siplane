@@ -45,7 +45,7 @@ defmodule Siplane.Board do
   def status(board_id) do
     Registry.lookup(__MODULE__.Server.Registry, board_id)
     |> Enum.map(fn {pid, _} ->
-      GenServer.call(pid, :get_status)
+      GenServer.call(pid, :get_state)
     end)
     |> List.first(:disconnected)
   end
@@ -61,25 +61,22 @@ defmodule Siplane.Board do
     GenServer.call(pid, {:update_state, status})
   end
 
+  # TODO: extend this with a user argument, etc.
+  def new_instant_job(board_id, environment_id, environment_version) do
+    pid = get_or_start(board_id)
+    GenServer.call(pid, {:create_instant_job, environment_id, environment_version})
+  end
+
   # Retrieve a given number of log messages related to boards.
   #
   # When nil == 0, this loads all log messages related to this board.
   def board_log(board_id, limit \\ 50) do
-    # sql_selection = [
-    #   where: msg.board_id == ^board_id,
-    #   sort_by: msg.inserted_at,
-    # ]
-
-    # sql_selection =
-    #   if !is_nil(limit) do
-    # 	[{:limit, limit} | sql_selection]
-    #   else
-    # 	sql_selection
-    #   end
+    validate_board_id(board_id)
+    ecto_board_id = Ecto.UUID.load! board_id
 
     query = from bl in Siplane.Board.LogEvent,
       join: l in assoc(bl, :log_event),
-      where: bl.board_id == ^board_id,
+      where: bl.board_id == ^ecto_board_id,
       order_by: [desc: l.inserted_at]
 
     query =
@@ -114,7 +111,16 @@ defmodule Siplane.Board do
 
   # ----- Private API ----------------------------------------------------------
 
+  defp validate_board_id(board_id) do
+    # Validate that this board_id is a valid binary UUID:
+    if !is_binary(board_id) || byte_size(board_id) != 16 do
+      raise ArgumentError, message: "invalid argument board_id: #{inspect board_id}"
+    end
+  end
+
   defp get_or_start(board_id) do
+    validate_board_id(board_id)
+
     # We need to atomically either get a board GenServer from the registry or
     # spawn one. We try to get one first, and if this doesn't work spawn
     # one. When spawning the GenServer, it itself will then try to register

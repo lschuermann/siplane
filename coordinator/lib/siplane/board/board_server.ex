@@ -21,6 +21,12 @@ defmodule Siplane.Board.Server do
 
   @impl true
   def init(board_id) do
+    # First check whether this board actually exists in the
+    # database. If it does not, we shouldn't attempt to start a server
+    # for it.
+    #
+    # TODO: implement this check!
+
     # Register this server before returning. If we race with another server
     # starting for the same board, exit immediately without returning an error
     # (by returning :ignore).
@@ -87,6 +93,7 @@ defmodule Siplane.Board.Server do
     )
 
     state = %{ state | runner_pid: runner_pid, board_state: :unknown }
+    IO.puts "Setting runner_pid to #{inspect state.runner_pid}"
 
     request_runner_status(state)
 
@@ -121,13 +128,41 @@ defmodule Siplane.Board.Server do
 	      board_id: Ecto.UUID.load!(state.board_id),
 	      public: true,
 	      owner_visible: true,
-}
+            }
 	  ],
 	}
       )
     end
 
     {:reply, :ok, %{ state | board_state: board_state } }
+  end
+
+  @impl true
+  def handle_call({:create_instant_job, environment_id, environment_version}, _from, state) do
+    # TODO: implement actual logic!
+
+    IO.puts "Create instant job, runner PID: #{inspect state.runner_pid}, board ID: #{inspect state.board_id}!"
+    job_id_str = UUID.uuid4()
+
+    if !is_nil(state.runner_pid) do
+      IO.puts "Sending message to runner_pid to start job!"
+      send(
+	state.runner_pid, {
+	  :board_event,
+	  state.board_id,
+	  :runner_msg,
+	  %{
+	    type: :start_job,
+	    id: job_id_str,
+	    environment_id: environment_id,
+	    environment_version: environment_version,
+	    ssh_keys: []
+	  }
+	}
+      )
+    end
+
+    {:reply, { :ok, UUID.string_to_binary!(job_id_str) }, state }
   end
 
   @impl true

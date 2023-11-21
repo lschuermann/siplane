@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+#[macro_use]
+extern crate serde;
+
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -7,6 +10,7 @@ use uuid::Uuid;
 pub struct EnvironmentConfig {
     id: String,
     version: String,
+    init: String,
 }
 
 #[derive(Deserialize)]
@@ -17,34 +21,110 @@ pub struct Config {
 }
 
 #[derive(Deserialize)]
-struct SSEMessage {
-    #[serde(rename = "type")]
-    message_type: String,
-}
-
-struct NspawnRunner {
-}
-
-impl NspawnRunner {
-    pub fn new() -> Self {
-	NspawnRunner {}
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "type")]
+pub enum SSEMessage {
+    UpdateState,
+    StartJob {
+	id: Uuid,
+	environment_id: String,
+	environment_version: String,
+	ssh_keys: Vec<String>,
     }
 }
 
-async fn send_state_update(config: &Config, runner: &NspawnRunner) {
-    let mut pld = HashMap::new();
-    pld.insert("state", "idle");
-    let client = reqwest::Client::new();
-    client.put(
-	&format!("{}/api/runner/v0/boards/{}/state", config.coordinator_base_url, config.board_id.to_string())
-    )
-	.json(&pld)
+#[derive(Serialize)]
+#[serde(tag = "state")]
+#[serde(rename_all = "snake_case")]
+enum RunnerState {
+    Idle,
+    Starting {
+	job: Uuid,
+    },
+    Running {
+	job: Uuid,
+    },
+    Stopping {
+	job: Uuid,
+    },
+}
+
+struct NspawnRunner<'a> {
+    config: &'a Config,
+    nspawn_process: Option<tokio::process::Child>,
+    current_job: Uuid,
+    log: Vec<String>,
+    client: reqwest::Client,
+}
+
+impl<'a> NspawnRunner<'a> {
+    pub fn new(config: &'a Config) -> Self {
+	NspawnRunner {
+	    config,
+	    nspawn_process: None,
+	    current_job: Uuid::nil(),
+	    log: Vec::new(),
+	    client: reqwest::Client::new(),
+	}
+    }
+
+    pub fn state(&self) -> RunnerState {
+	if self.nspawn_process.is_some() {
+	    RunnerState::Running {
+		job: self.current_job,
+	    }
+	} else {
+	    RunnerState::Idle
+	}
+    }
+
+    pub async fn send_state_update(&self) {
+	self.client.put(
+	    &format!("{}/api/runner/v0/boards/{}/state", self.config.coordinator_base_url, self.config.board_id.to_string())
+	)
+	.json(&self.state())
 	.send()
 	.await
 	.unwrap();
+    }
+
+    pub async fn start_job(&mut self, environment_id: &str, environment_version: &str, job_id: Uuid, ssh_keys: Vec<String>) {
+	println!("Starting new job!");
+
+	if self.nspawn_process.is_some() {
+	    panic!("Tried to start job with existing job already running!");
+	}
+
+	let environment_config = self.config.environments.values()
+	    .find(|env_config| env_config.id == environment_id && env_config.version == environment_version).unwrap();
+
+	let proc = tokio::process::Command::new("systemd-run")
+	    .args([
+		"--scope",
+		"--property=DevicePolicy=closed",
+		// "--property=DeviceAllow='/dev/ttyUSB1 rw'",
+		"--",
+		"systemd-nspawn",
+		"-D",
+		"/containerfs",
+		"--keep-unit",
+		"--private-users=pick",
+		"--private-network",
+		"--network-veth",
+		"--bind-ro=/nix/store",
+		"--bind-ro=/nix/var/nix/db",
+		"--bind-ro=/nix/var/nix/daemon-socket",
+		// "--bind=/dev/ttyUSB1",
+		&environment_config.init,
+	    ])
+	    .spawn()
+	    .expect("Failed to spawn environment");
+
+	self.nspawn_process = Some(proc);
+    }
 }
 
-async fn stream_loop(config: &Config, runner: &mut NspawnRunner) {
+async fn stream_loop<'a>(config: &Config, runner: &mut NspawnRunner<'a>) {
     use futures::{TryStreamExt};
     use eventsource_client::{Client, SSE};
 
@@ -64,17 +144,12 @@ async fn stream_loop(config: &Config, runner: &mut NspawnRunner) {
 		match ev.event_type.as_str() {
 		    "message" => {
 			match serde_json::from_str::<SSEMessage>(&ev.data) {
-			    Ok(m) => {
-				println!("Received message of type {}", m.message_type);
-				match m.message_type.as_str() {
-				    "update_state" => {
-					send_state_update(config, runner).await;
-				    },
+			    Ok(SSEMessage::UpdateState) => {
+				runner.send_state_update().await;
+			    },
 
-				    _ => {
-					println!("Unknown SSE message type \"{}\"!", m.message_type);
-				    }
-				}
+			    Ok(SSEMessage::StartJob { id, environment_id, environment_version, ssh_keys }) => {
+				runner.start_job(&environment_id, &environment_version, id, ssh_keys).await;
 			    },
 
 			    Err(e) => {
@@ -110,9 +185,11 @@ async fn main() {
     let config_str = std::fs::read_to_string("runner_config.toml").unwrap();
     let config: Config = toml::from_str(&config_str).unwrap();
 
-    let mut nspawn_runner = NspawnRunner::new();
+    let mut nspawn_runner = NspawnRunner::new(&config);
 
     loop {
-	stream_loop(&config, &mut nspawn_runner).await
+	stream_loop(&config, &mut nspawn_runner).await;
+	tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+	    
     }
 }
