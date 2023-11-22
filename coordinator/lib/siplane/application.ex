@@ -35,6 +35,8 @@ defmodule Siplane.Application do
       # is also used as a PubSub mechanism to subscribe to
       # board-related events.
       Siplane.Board,
+
+      Siplane.Job,
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -53,14 +55,36 @@ defmodule Siplane.Application do
 
   # Move this somewhere else!
   def insert_dummy_data() do
-    Siplane.Repo.insert!(%Siplane.Board{
-	  label: "Test nRF52840DK",
-	  location: "Princeton University",
-	  manufacturer: "Nordic Semiconductor",
-	  model: "nRF52840DK",
-	  runner_token: "foobar",
-	  image_url: "https://www.nordicsemi.com/-/media/Images/Products/DevKits/nRF52-Series/nRF52840-DK/nRF52840-DK-promo.png?sc_lang=en",
-   })
+    Siplane.Repo.insert!(
+      %Siplane.Board{
+	id: "ed8d3c39-6d34-41af-9fba-ff34109d9dbe",
+	label: "Test nRF52840DK",
+	location: "Princeton University",
+	manufacturer: "Nordic Semiconductor",
+	model: "nRF52840DK",
+	runner_token: "foobar",
+	image_url: "https://www.nordicsemi.com/-/media/Images/Products/DevKits/nRF52-Series/nRF52840-DK/nRF52840-DK-promo.png?sc_lang=en",
+	environments: [
+	  %Siplane.Environment{
+	    id: "c4e08e00-cfb0-46d1-83eb-ee62e128cc70",
+	    label: "Test Nix Nspawn Environment",
+          }
+	],
+      }
+    )
+
+    Siplane.Repo.insert!(
+      %Siplane.Job{
+	id: "7556c6ae-d873-4246-9e06-e3a1712b02ff",
+	label: "Test Job!!111eleven",
+	start: DateTime.from_unix!(0),
+	end: nil,
+	dispatched: false,
+	completion_code: nil,
+	board_id: "ed8d3c39-6d34-41af-9fba-ff34109d9dbe",
+	environment_id: "c4e08e00-cfb0-46d1-83eb-ee62e128cc70",
+      }
+    )
   end
 end
 

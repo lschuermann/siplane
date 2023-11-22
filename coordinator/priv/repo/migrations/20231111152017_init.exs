@@ -73,6 +73,20 @@ defmodule Siplane.Repo.Migrations.Init do
       timestamps(type: :utc_datetime)
     end
 
+    create table(:environments, primary_key: false) do
+      add :id, :binary_id, primary_key: true, null: false
+      add :label, :string, null: false
+
+      timestamps(type: :utc_datetime)
+    end
+
+    create table(:board_environments, primary_key: false) do
+      add :board_id, references(:boards, type: :binary_id), primary_key: true
+      add :environment_id, references(:environments, type: :binary_id), primary_key: true
+
+      timestamps(type: :utc_datetime)
+    end
+
     create table(:log_event_boards, primary_key: false) do
       add :log_event_id, references(:log_events, type: :binary_id), primary_key: true
       add :board_id, references(:boards, type: :binary_id), primary_key: true
@@ -91,5 +105,25 @@ defmodule Siplane.Repo.Migrations.Init do
       timestamps(type: :utc_datetime)
     end
 
+    create table(:jobs, primary_key: false) do
+      add :id, :binary_id, primary_key: true, null: false
+      add :label, :string
+
+      add :start, :utc_datetime, null: false
+      # Jobs may not have a defined end, in which case the earliest
+      # non-completed job should run until it is manually stopped.
+      add :end, :utc_datetime
+      # Whether this job has ever been dispatched to a runner. This
+      # can be used to implement recovery strategies in case of server
+      # crashes, as it gives us a way to identify jobs which have been
+      # started, but never completed (e.g. marked as crashed).
+      add :dispatched, :boolean, null: false
+      add :completion_code, :string # Null when not complete.
+
+      add :board_id, references(:boards, type: :binary_id), null: false
+      add :environment_id, references(:environments, type: :binary_id), null: false
+
+      timestamps(type: :utc_datetime)
+    end
   end
 end

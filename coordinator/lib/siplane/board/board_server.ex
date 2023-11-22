@@ -1,19 +1,151 @@
+defmodule Siplane.Board.Server.JobState do
+  defstruct [
+    state: {:wait_for_start, DateTime.utc_now()},
+    # Log of individual lines, reversed (newest to oldest)
+    runner_log: [],
+  ]
+end
+
+
 defmodule Siplane.Board.Server do
   use GenServer
+  import Ecto.Query
 
   defstruct [
     :board_id,
     :runner_pid,
-    :board_state,
+    # Maximum number of simultaneous jobs. TODO: determine where to get this
+    # from. The runner or the database?
+    :max_jobs,
+    :active_jobs,
+    :runner_supervisor_timer,
   ]
 
   # This module solely contains the GenServer implementation. The public-facing
   # API is provided by the Siplane.Board module (which manages these servers,
   # plus subscribers to board-related events).
 
-  defp request_runner_status(state) do
-    if !is_nil(state.runner_pid) do
-      send(state.runner_pid, {:board_event, state.board_id, :runner_msg, %{type: :update_state}})
+  defp arm_runner_supervisor_timer(state) do
+    # We want to re-arm the timer if it has expired. For now, let's just
+    # periodically send a message. This can be optimized to only send a message
+    # when there's active jobs. Check if a timer exists, and if it doesn't, set
+    # one. This _should_ be impossible to race, given that this code is
+    # exclusive and single-threaded.
+    if is_nil(state.runner_supervisor_timer) || !Process.read_timer(state.runner_supervisor_timer) do
+      %{ state | runner_supervisor_timer: Process.send_after(self(), :runner_supervisor_timer, 5000) }
+    else
+      state
+    end
+  end
+
+  defp complete_jobs(state, job_ids, completion_code) do
+    # Remove the job_ids from the active_jobs map. This is more efficient than
+    # using Map.filter, as that would have to walk the job_ids list for every
+    # active_job.
+    active_jobs = List.foldl(
+      job_ids,
+      state.active_jobs,
+      fn job_id, active_jobs ->
+	{_, active_jobs} = Map.pop!(active_jobs, job_id)
+	active_jobs
+      end
+    )
+
+    # Set the completion code for all of these jobs in the DB:
+    ecto_job_ids = job_ids |> Enum.map(&Ecto.UUID.load!/1)
+    Siplane.Repo.update_all(
+      from(j in Siplane.Job, where: j.id in ^ecto_job_ids),
+      set: [completion_code: completion_code, updated_at: DateTime.utc_now()]
+    )
+
+    # Unregister this board server for those jobs
+    for job_id <- job_ids do
+      :ok = Registry.unregister(Siplane.Job.BoardRegistry, job_id)
+    end
+
+    # Return the updated state:
+    %{ state | active_jobs: active_jobs }
+  end
+
+  # Triggered periodically, through a timer (re)armed by
+  # arm_runner_supervisor_timer:
+  defp supervise_runners(state) do
+    # Fold over active_jobs and state
+    {jobs_changed, state} =
+      Map.to_list(state.active_jobs)
+      |> List.foldl(
+	{false, state},
+	fn {job_id, job}, {jobs_changed, state} ->
+	  case job.state do
+	    {:wait_for_start, t} ->
+	      if :lt = DateTime.compare(DateTime.add(t, 5, :second), DateTime.utc_now()) do
+		{true, complete_jobs(state, [job_id], :runner_timeout)}
+	      else
+		{jobs_changed, state}
+	      end
+	    _ ->
+	      {jobs_changed, state}
+	  end
+	end
+     )
+
+    if jobs_changed do
+      notify_board_update(state, :jobs)
+    else
+      state
+    end
+  end
+
+  defp notify_board_update(state, what) do
+    Registry.dispatch(Siplane.Board.SubscriberRegistry, state.board_id, fn subscribers ->
+      for {pid, _} <- subscribers, do: send(pid, {:board_event, state.board_id, :update, what})
+    end)
+    state
+  end
+
+  # This assumes that we have an established runner connection:
+  defp schedule_jobs(state) do
+    if map_size(state.active_jobs) < state.max_jobs do
+      # TODO: limit to jobs whose start time is reasonably close to the current time...
+      case Siplane.Job.pending_jobs(board_id: state.board_id, limit: 1) do
+	[] -> state
+	[job] ->
+	  job_id = UUID.string_to_binary!(job.id)
+
+	  # Register as the board server for this job:
+	  {:ok, _} = Registry.register(Siplane.Job.BoardRegistry, job_id, nil)
+
+	  # We've "accepted" this job, so mark it as dispatched in the DB. This
+	  # will ensure that we can pick it back up in the future, should this
+	  # process crash:
+	  Siplane.Repo.update!(Siplane.Job.changeset(job, %{ dispatched: true }))
+
+	  # Tell the runner:
+	  send(
+	    state.runner_pid, {
+	      :board_event,
+	      state.board_id,
+	      :runner_msg,
+	      %{
+		type: :start_job,
+		id: UUID.binary_to_string!(job_id),
+		environment_id: job.environment_id,
+		ssh_keys: []
+	      }
+	    }
+	  )
+
+	  # Let the subscribers for this job now:
+	  # TODO
+
+	  # Update state, (re)set and recursively try to schedule another
+	  # job. This is tail-recursive.
+	  %{ state | active_jobs: Map.put(state.active_jobs, job_id, %__MODULE__.JobState{}) }
+	  |> arm_runner_supervisor_timer
+	  |> schedule_jobs
+      end
+    else
+      state
     end
   end
 
@@ -24,43 +156,60 @@ defmodule Siplane.Board.Server do
     # First check whether this board actually exists in the
     # database. If it does not, we shouldn't attempt to start a server
     # for it.
-    #
-    # TODO: implement this check!
+    case Siplane.Repo.exists?(from b in Siplane.Board, where: b.id == ^Ecto.UUID.load!(board_id)) do
+      false ->
+	{:error, :board_id_invalid}
 
-    # Register this server before returning. If we race with another server
-    # starting for the same board, exit immediately without returning an error
-    # (by returning :ignore).
-    case Registry.register(__MODULE__.Registry, board_id, nil) do
-      {:error, {:already_registered, _}} ->
-	# We raced, ignore this start request:
-	:ignore
+      true ->
+	# Register this server before returning. If we race with another server
+	# starting for the same board, exit immediately without returning an
+	# error (by returning :ignore).
+	case Registry.register(__MODULE__.Registry, board_id, nil) do
+	  {:error, {:already_registered, _}} ->
+	    # We raced, ignore this start request:
+	    :ignore
 
-      {:ok, _} ->
-	# We started & are successfully registered.
+	  {:ok, _} ->
+	    # We started & are successfully registered.
+	    state = %__MODULE__{
+    	      board_id: board_id,
+	      runner_pid: nil,
+	      max_jobs: 1,
+	      active_jobs: %{},
+	      runner_supervisor_timer: nil,
+            }
 
-	# TODO: at some point we should cleanup old servers, when they have no event
-	# subscribers or other dependencies any more. However, we need to make sure
-	# that this doesn't race with any requests (i.e. don't shut down in between
-	# starting the server and servicing a request). We may be able to enforce
-	# this consistency as long as all other entities interact with this server
-	# through the public-facing interface of this module.
+	    # Tell all subscribers about the news!
+	    notify_board_update(state, {:server_started, self()})
 
-	{
-	  :ok,
-	  %__MODULE__{
-	    board_id: board_id,
-	    runner_pid: nil,
-	    board_state: :disconnected,
-	  }
-	}
+	    # If we were executing some jobs previously (dispatched == true),
+	    # but haven't yet completed them, set their completion_code to
+	    # :server_crashed. In the future, this allows us to implement a
+	    # crash recovery policy.
+	    #
+	    # Its safe for us to do this here, as we're guaranteed to be the
+	    # only board server, and we have not yet run any pending jobs:
+	    from(j in Siplane.Job, where: j.board_id == ^Ecto.UUID.load!(board_id) and j.dispatched == true and is_nil(j.completion_code))
+	    |> Siplane.Repo.update_all(set: [completion_code: :server_crashed, updated_at: DateTime.utc_now()])
+
+	    # TODO: at some point we should cleanup old servers, when they have
+	    # no event subscribers or other dependencies any more. However, we
+	    # need to make sure that this doesn't race with any requests
+	    # (i.e. don't shut down in between starting the server and servicing
+	    # a request). We may be able to enforce this consistency as long as
+	    # all other entities interact with this server through the
+	    # public-facing interface of this module.
+
+	    {:ok, state}
+	end
     end
   end
 
   @impl true
-  def handle_call(:get_state, _from, state) do
+  def handle_call(:get_runner_connected, _from, state) do
     {
       :reply,
-      state.board_state,
+      !is_nil(state.runner_pid) && Process.alive?(state.runner_pid),
       state,
     }
   end
@@ -92,16 +241,15 @@ defmodule Siplane.Board.Server do
       }
     )
 
-    state = %{ state | runner_pid: runner_pid, board_state: :unknown }
-    IO.puts "Setting runner_pid to #{inspect state.runner_pid}"
-
-    request_runner_status(state)
+    state =
+      %{ state | runner_pid: runner_pid }
+      |> schedule_jobs
+      |> notify_board_update(:runner_connected)
 
     {
       :reply,
       {
 	:ok,
-	self(),
 	# TODO: craft an appropriate last will and testament message
 	"oops I'm dead!",
       },
@@ -110,63 +258,19 @@ defmodule Siplane.Board.Server do
   end
 
   @impl true
-  def handle_call({:update_state, board_state}, _from, state) do
-    if state.board_state != board_state do
-      Siplane.Log.info(
-	%Siplane.Log{
-	  severity: Siplane.Log.severity_info,
-	  event_type: "board_runner_state_changed",
-	  event_version: "0.1",
-	  message: "Board ${board_id} has changed state from ${old_state} to ${new_state}.",
-	  data: %{
-	    board_id: UUID.binary_to_string!(state.board_id),
-	    old_state: state.board_state,
-	    new_state: board_state,
-	  },
-	  log_event_boards: [
-	    %Siplane.Board.LogEvent{
-	      board_id: Ecto.UUID.load!(state.board_id),
-	      public: true,
-	      owner_visible: true,
-            }
-	  ],
-	}
-      )
-    end
-
-    {:reply, :ok, %{ state | board_state: board_state } }
-  end
-
-  @impl true
-  def handle_call({:create_instant_job, environment_id, environment_version}, _from, state) do
-    # TODO: implement actual logic!
-
-    IO.puts "Create instant job, runner PID: #{inspect state.runner_pid}, board ID: #{inspect state.board_id}!"
-    job_id_str = UUID.uuid4()
-
-    if !is_nil(state.runner_pid) do
-      IO.puts "Sending message to runner_pid to start job!"
-      send(
-	state.runner_pid, {
-	  :board_event,
-	  state.board_id,
-	  :runner_msg,
-	  %{
-	    type: :start_job,
-	    id: job_id_str,
-	    environment_id: environment_id,
-	    environment_version: environment_version,
-	    ssh_keys: []
-	  }
-	}
-      )
-    end
-
-    {:reply, { :ok, UUID.string_to_binary!(job_id_str) }, state }
+  def handle_cast(:schedule_jobs, state) do
+    {:noreply, schedule_jobs(state)}
   end
 
   @impl true
   def handle_info({:DOWN, _ref, :process, runner_pid, _type}, %{ runner_pid: runner_pid } = state) do
+    # Mark all active jobs as failed and remove them from the board registry and
+    # state. We may want to implement a retry-policy later:
+    state =
+      %{ state | runner_pid: nil }
+      |> complete_jobs(Map.keys(state.active_jobs), :failed)
+
+    # TODO: different log message when there were active jobs
     Siplane.Log.info(
       %Siplane.Log{
 	severity: Siplane.Log.severity_info,
@@ -183,14 +287,23 @@ defmodule Siplane.Board.Server do
 	    owner_visible: true,
           }
 	],
+	# TODO: attach this to all the jobs we've just marked as failed!
       }
     )
+
+    notify_board_update(state, :runner_disconnected)
 
     {
       :noreply,
       %{
-	state | runner_pid: nil, board_state: :disconnected
+	state | runner_pid: nil
       },
     }
+  end
+
+  @impl true
+  def handle_info(:runner_supervisor_timer, state) do
+    # Rearm the timer, if necessary, after processing the supervision routine:
+    {:noreply, arm_runner_supervisor_timer(supervise_runners(state)) }
   end
 end

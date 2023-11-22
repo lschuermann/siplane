@@ -18,10 +18,13 @@ defmodule SiplaneWeb.Router do
   scope "/", SiplaneWeb do
     pipe_through :browser
 
-    get "/", WebUI.PageController, :home
     live_session :default, on_mount: SiplaneWeb.WebUI.LiveHooks.SetUser do
+      live "/jobs/:id", WebUI.JobController.Live
       live "/boards/:id", WebUI.BoardController.Live
     end
+
+
+    get "/", WebUI.PageController, :home
     resources "/boards", WebUI.BoardController, only: [:index, :show]
     get "/user", WebUI.UserController, :index
   end

@@ -1,26 +1,90 @@
 <%= if @board.image_url do %>
 <img class="h-auto max-w-full rounded-lg px-2 pb-2 pt-4 mb-4" src={@board.image_url} alt="">
 <% end %>
-<%= if @board.runner_connected do %>
-✔
-<% else %>
-✘
-<% end %>
 <h2 class="pb-2 text-xl"><%= @board.label %></h2>
+<%= if @runner_connected do %>
+Connected
+<% else %>
+Disconnected
+<% end %>
 <p><%= @board.manufacturer %> <%= @board.model %></p>
 <%= if @board.hwrev do %>
 <p>Hardware revision: <%= @board.hwrev %></p>
 <% end %>
 <p>Location: <%= @board.location %></p>
 
-<h2 class="pb-2 text-l">New Job</h2>
+<h2 class="pb-2 text-3xl">New Job</h2>
+Create new instant job:
 <.form for={@form} phx-submit="new-job">
-  <button>New Job!</button>
+  <button>!</button>
 </.form>
 
-<h2 class="pb-2 text-l">Log</h2>
-<ul>
-<%= for message <- @log_events do %>
-<li><%= message.message %>, <%= inspect message.data %></li>
-<% end %>
-</ul>
+<h2 class="pb-2 text-3xl">Active Jobs</h2>
+<table>
+  <tr>
+    <th>Start</th>
+    <th>End</th>
+    <th>Label</th>
+    <th>Environment</th>
+  </tr>
+  <%= for job <- @active_jobs do %>
+    <tr>
+      <td><%= job.start %></td>
+      <td><%= job.end %></td>
+      <td><%= job.label %></td>
+      <td><%= job.environment_id %></td>
+    </tr>
+  <% end %>
+</table>
+
+
+<h2 class="pb-2 text-3xl">Pending Jobs</h2>
+<table>
+  <tr>
+    <th>Start</th>
+    <th>End</th>
+    <th>Label</th>
+    <th>Environment</th>
+  </tr>
+  <%= for job <- @pending_jobs do %>
+    <tr>
+      <td><%= job.start %></td>
+      <td><%= job.end %></td>
+      <td><%= job.label %></td>
+      <td><%= job.environment_id %></td>
+    </tr>
+  <% end %>
+</table>
+
+<h2 class="pb-2 text-3xl">Completed Jobs</h2>
+<table>
+  <tr>
+    <th>Start</th>
+    <th>End</th>
+    <th>Label</th>
+    <th>Completion Code</th>
+  </tr>
+  <%= for job <- @completed_jobs do %>
+    <tr>
+      <td><%= job.start %></td>
+      <td><%= job.end %></td>
+      <td><%= job.label %></td>
+      <td><%= job.completion_code %></td>
+    </tr>
+  <% end %>
+</table>
+
+
+<h2 class="pb-2 text-3xl">Log</h2>
+<table>
+  <tr>
+    <th>Timestamp</th>
+    <th>Message</th>
+  </tr>
+  <%= for message <- @log_events do %>
+    <tr>
+      <td><%= message.inserted_at %></td>
+      <td><%= message.message %></td>
+    </tr>
+  <% end %>
+</table>

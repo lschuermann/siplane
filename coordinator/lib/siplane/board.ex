@@ -18,10 +18,15 @@ defmodule Siplane.Board do
     field :image_url, :string
 
     timestamps(type: :utc_datetime)
+
+    many_to_many :environments, Siplane.Environment,
+      join_through: Siplane.BoardEnvironment
+    has_many :jobs, Siplane.Job
   end
 
   @doc false
   def changeset(board, attrs) do
+    # TODO: environments foreign key constraint?
     board
     |> cast(attrs, [:label, :manufacturer, :model, :hwrev, :location, :runner_token])
     |> validate_required([:label, :manufacturer, :model, :hwrev, :location, :runner_token])
@@ -39,33 +44,29 @@ defmodule Siplane.Board do
   # Check whether a runner is currently connected to a board. This
   # will not start a new board server, in case one doesn't exist yet.
   def runner_connected?(board_id) do
-    status(board_id) != :disconnected
-  end
-
-  def status(board_id) do
     Registry.lookup(__MODULE__.Server.Registry, board_id)
     |> Enum.map(fn {pid, _} ->
-      GenServer.call(pid, :get_state)
+      GenServer.call(pid, :get_runner_connected)
     end)
-    |> List.first(:disconnected)
+    |> List.first(false)
   end
 
   # Connect the current process as a runner-connection to this board.
   def connect_runner(board_id, conn_info) do
     pid = get_or_start(board_id)
-    GenServer.call(pid, {:connect_runner, conn_info})
+    case GenServer.call(pid, {:connect_runner, conn_info}) do
+      {:ok, last_will_and_testament} ->
+	{:ok, pid, last_will_and_testament}
+      other ->
+	other
+    end
   end
 
-  def update_state(board_id, status) do
-    pid = get_or_start(board_id)
-    GenServer.call(pid, {:update_state, status})
-  end
-
-  # TODO: extend this with a user argument, etc.
-  def new_instant_job(board_id, environment_id, environment_version) do
-    pid = get_or_start(board_id)
-    GenServer.call(pid, {:create_instant_job, environment_id, environment_version})
-  end
+  # # TODO: extend this with a user argument, etc.
+  # def new_instant_job(board_id, environment_id, environment_version) do
+  #   pid = get_or_start(board_id)
+  #   GenServer.call(pid, {:create_instant_job, environment_id, environment_version})
+  # end
 
   # Retrieve a given number of log messages related to boards.
   #
@@ -109,9 +110,25 @@ defmodule Siplane.Board do
     end
   end
 
+  # Whenever jobs related to this board have been updated.
+  def jobs_updated(board_id) do
+    # First, inform the board server of this event, if one is running:
+    Registry.dispatch(__MODULE__.Server.Registry, board_id, fn servers ->
+      case servers do
+	[{pid, _}] -> GenServer.cast(pid, :schedule_jobs)
+	_ -> :ok
+      end
+    end)
+
+    # Then, inform the subscribers
+    Registry.dispatch(__MODULE__.SubscriberRegistry, board_id, fn subscribers ->
+      for {pid, _} <- subscribers, do: send(pid, {:board_event, board_id, :update, :jobs})
+    end)
+  end
+
   # ----- Private API ----------------------------------------------------------
 
-  defp validate_board_id(board_id) do
+  def validate_board_id(board_id) do
     # Validate that this board_id is a valid binary UUID:
     if !is_binary(board_id) || byte_size(board_id) != 16 do
       raise ArgumentError, message: "invalid argument board_id: #{inspect board_id}"

@@ -48,6 +48,23 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
   use SiplaneWeb, :live_view
   import Ecto.Query
 
+  defp update_board_state(socket) do
+    ecto_board_id = Ecto.UUID.load!(socket.assigns.board_id)
+
+    # Query board information, and get or start an orchestrator
+    # process for this board, which we can then suscribe to to
+    # receive log messages.
+    socket =
+      socket
+      |> assign(board: Siplane.Repo.one!(
+	  from b in Siplane.Board, where: b.id == ^ecto_board_id
+	))
+      |> assign(runner_connected: Siplane.Board.runner_connected?(socket.assigns.board_id))
+      |> assign(pending_jobs: Siplane.Job.pending_jobs(board_id: socket.assigns.board_id, limit: 10))
+      |> assign(active_jobs: Siplane.Job.active_jobs(board_id: socket.assigns.board_id))
+      |> assign(completed_jobs: Siplane.Job.completed_jobs(board_id: socket.assigns.board_id, limit: 50))
+  end
+
   @impl true
   def render(assigns) do
     SiplaneWeb.WebUI.PageHTML.board(assigns)
@@ -65,20 +82,14 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
 	{:error, :uuid_invalid}
 
       {:ok, parsed_board_id} ->
+	# Assign the board_id at the start. This way we can re-use the
+	# update_board_state method to generate the board assign even
+	# in the mount function:
 	board_id = Keyword.get(parsed_board_id, :binary)
-	ecto_board_id = Ecto.UUID.load!(board_id)
+	socket = assign(socket, board_id: board_id)
 
-	# Query board information, and get or start an orchestrator
-	# process for this board, which we can then suscribe to to
-	# receive log messages.
-	board = Siplane.Repo.one!(
-	  from b in Siplane.Board, where: b.id == ^ecto_board_id)
-
-	board = Map.put(
-	  board,
-	  :runner_connected,
-	  Siplane.Board.runner_connected?(board_id)
-	)
+	# Fetch the board state form the database & board server:
+	socket = update_board_state(socket)
 
 	# Subscribe to log messages
 	:ok = Siplane.Board.subscribe board_id
@@ -88,9 +99,8 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
 	  assign(
 	    socket,
 	    board_id: board_id,
-	    board: board,
 	    form: to_form(%{}),
-	    log_events: Siplane.Board.board_log(board_id),
+	    log_events: Siplane.Board.board_log(board_id)
 	  )
 	}
     end
@@ -107,16 +117,27 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
     }
   end
 
-  def handle_event("new-job", _, socket) do
-    # IO.puts("New job!")
+  @impl true
+  def handle_info({:board_event, _board_id, :update, _pld}, socket) do
+    {:noreply, update_board_state(socket)}
+  end
 
-    # TODO: request creation of a proper job object which then
-    # schedules itself on a board, etc. For now, lets just send a
-    # message to the SSE channel quick and dirty.
-    IO.puts "New code!"
-    IO.inspect(socket.assigns.board_id)
-    {:ok, job_id} = Siplane.Board.new_instant_job(socket.assigns.board_id, "nixos_dev", "v1.0")
-
+  @impl true
+  def handle_info({:board_event, _board_id, _ev_type, _pld}, socket) do
     {:noreply, socket}
   end
+
+  # @impl true
+  # def handle_event("new-job", _, socket) do
+  #   # IO.puts("New job!")
+
+  #   # TODO: request creation of a proper job object which then
+  #   # schedules itself on a board, etc. For now, lets just send a
+  #   # message to the SSE channel quick and dirty.
+  #   IO.puts "New code!"
+  #   IO.inspect(socket.assigns.board_id)
+  #   {:ok, _job_id} = Siplane.Board.new_instant_job(socket.assigns.board_id, "nixos_dev", "v1.0")
+
+  #   {:noreply, socket}
+  # end
 end

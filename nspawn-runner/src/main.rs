@@ -8,8 +8,6 @@ use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct EnvironmentConfig {
-    id: String,
-    version: String,
     init: String,
 }
 
@@ -28,7 +26,6 @@ pub enum SSEMessage {
     StartJob {
 	id: Uuid,
 	environment_id: String,
-	environment_version: String,
 	ssh_keys: Vec<String>,
     }
 }
@@ -36,17 +33,10 @@ pub enum SSEMessage {
 #[derive(Serialize)]
 #[serde(tag = "state")]
 #[serde(rename_all = "snake_case")]
-enum RunnerState {
-    Idle,
-    Starting {
-	job: Uuid,
-    },
-    Running {
-	job: Uuid,
-    },
-    Stopping {
-	job: Uuid,
-    },
+enum JobState {
+    Starting,
+    Running,
+    Stopping,
 }
 
 struct NspawnRunner<'a> {
@@ -68,35 +58,21 @@ impl<'a> NspawnRunner<'a> {
 	}
     }
 
-    pub fn state(&self) -> RunnerState {
-	if self.nspawn_process.is_some() {
-	    RunnerState::Running {
-		job: self.current_job,
-	    }
-	} else {
-	    RunnerState::Idle
-	}
-    }
-
-    pub async fn send_state_update(&self) {
+    pub async fn start_job(&mut self, environment_id: &str, job_id: Uuid, ssh_keys: Vec<String>) {
+	println!("Starting job {:?}", job_id);
 	self.client.put(
-	    &format!("{}/api/runner/v0/boards/{}/state", self.config.coordinator_base_url, self.config.board_id.to_string())
+	    &format!("{}/api/runner/v0/jobs/{}/state", self.config.coordinator_base_url, job_id.to_string())
 	)
-	.json(&self.state())
+	.json(&JobState::Starting)
 	.send()
 	.await
 	.unwrap();
-    }
-
-    pub async fn start_job(&mut self, environment_id: &str, environment_version: &str, job_id: Uuid, ssh_keys: Vec<String>) {
-	println!("Starting new job!");
 
 	if self.nspawn_process.is_some() {
 	    panic!("Tried to start job with existing job already running!");
 	}
 
-	let environment_config = self.config.environments.values()
-	    .find(|env_config| env_config.id == environment_id && env_config.version == environment_version).unwrap();
+	let environment_config = self.config.environments.get(environment_id).unwrap();
 
 	let proc = tokio::process::Command::new("systemd-run")
 	    .args([
@@ -145,11 +121,11 @@ async fn stream_loop<'a>(config: &Config, runner: &mut NspawnRunner<'a>) {
 		    "message" => {
 			match serde_json::from_str::<SSEMessage>(&ev.data) {
 			    Ok(SSEMessage::UpdateState) => {
-				runner.send_state_update().await;
+				// runner.send_state_update().await;
 			    },
 
-			    Ok(SSEMessage::StartJob { id, environment_id, environment_version, ssh_keys }) => {
-				runner.start_job(&environment_id, &environment_version, id, ssh_keys).await;
+			    Ok(SSEMessage::StartJob { id, environment_id, ssh_keys }) => {
+				runner.start_job(&environment_id, id, ssh_keys).await;
 			    },
 
 			    Err(e) => {

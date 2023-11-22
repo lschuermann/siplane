@@ -1,7 +1,7 @@
 coordinator_base_url = "http://localhost:4000"
-board_id = "8bfde627-583b-4935-a3e7-f259868eaec2"
+board_id = "ed8d3c39-6d34-41af-9fba-ff34109d9dbe"
 
-[environments.nixos_dev_2305_v1_0]
+[environments.c4e08e00-cfb0-46d1-83eb-ee62e128cc70]
 id = "nixos_dev"
 version = "v1.0"
-init = "/nix/store/y3h62baa8lpcxjh48pbf4y870944jxqf-nixos-system-si-pton-arty35-0-23.05.git.1a3c95e3b23b/init"
+init = "/nix/store/iq67l0chww1m154smd0v1psfqrg55wz4-nixos-system-si-pton-arty35-0-23.05.git.9075cba53e86/init"
