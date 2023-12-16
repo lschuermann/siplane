@@ -47,6 +47,7 @@ pub struct NspawnRunnerEnvironmentConfig {
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerConfig {
     coordinator_base_url: String,
+    host_veth_name: String,
     board_id: Uuid,
     keepalive_timeout: u64,
     reconnect_wait: u64,
@@ -323,7 +324,7 @@ impl connector::Runner for NspawnRunner {
             "--keep-unit".to_string(),
             "--private-users=pick".to_string(),
             "--private-network".to_string(),
-            "--network-veth".to_string(),
+            format!("--network-veth-extra={}:host0", this.config.host_veth_name),
             "--bind-ro=/nix/store".to_string(),
             "--bind-ro=/nix/var/nix/db".to_string(),
             "--bind-ro=/nix/var/nix/daemon-socket".to_string(),
@@ -645,8 +646,8 @@ impl connector::Runner for NspawnRunner {
         // til the end of this function:
         core::mem::drop(current_job_lg);
 
-	// Mark job as finished:
-	this.connector
+        // Mark job as finished:
+        this.connector
             .post_job_state(
                 job_id,
                 connector::rest_api::JobState::Finished {

@@ -1,4 +1,5 @@
 coordinator_base_url = "http://localhost:4000"
+host_veth_name = "siplanect0"
 board_id = "ed8d3c39-6d34-41af-9fba-ff34109d9dbe"
 keepalive_timeout = 60
 reconnect_wait = 10
