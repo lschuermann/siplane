@@ -99,7 +99,7 @@ impl NspawnRunner {
             (if zfs_root_cfg.clone_from.is_some() {
                 "clone"
             } else {
-                "new"
+                "create"
             })
             .to_string(),
             "-o".to_string(),
