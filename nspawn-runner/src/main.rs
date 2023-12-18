@@ -40,7 +40,7 @@ pub struct NspawnRunnerEnvironmentMountConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentConfig {
-    init: String,
+    init: Option<String>,
     shutdown_timeout: u64,
     mount: Vec<NspawnRunnerEnvironmentMountConfig>,
     zfsroot: Option<NspawnRunnerEnvironmentZfsRootConfig>,
@@ -350,8 +350,18 @@ impl connector::Runner for NspawnRunner {
             }
         }
 
-        // Add the init command:
-        run_args.push(environment_cfg.init.to_string());
+        // Add the init command, or the `--boot` flag to automatically search
+        // for a suitable PID1 init:
+        if let Some(ref init_cmd) = environment_cfg.init {
+            // In this case, we also set the `--kill-signal` to SIGRTMIN+3, as
+            // would be set if `--boot` were used. This allows us to gracefully
+            // shut down the container with a SIGTERM. This may be a systemd
+            // convention and could be made configurable.
+            run_args.push("--kill-signal=SIGRTMIN+3".to_string());
+            run_args.push(init_cmd.to_string());
+        } else {
+            run_args.push("--boot".to_string());
+        }
 
         let mut child = match tokio::process::Command::new("systemd-run")
             .args(run_args)
@@ -407,7 +417,7 @@ impl connector::Runner for NspawnRunner {
 
             loop {
                 // TODO: force buf flush on timeout?
-                let res = tokio::select!(
+                let res = tokio::select! {
                         read_res = stdout_reader.read(&mut stdout_buf) => {
                             match read_res {
                     Ok(read_len) => {
@@ -428,15 +438,15 @@ impl connector::Runner for NspawnRunner {
                             }
                         }
 
-                streamer_cmd_opt = streamer_chan_rx.recv() => {
+                        streamer_cmd_opt = streamer_chan_rx.recv() => {
                 match streamer_cmd_opt {
                     Some(ConsoleStreamerCommand::Shutdown) => Ok(true),
                     None => {
                     panic!("Streamer command channel TX dropped!");
                     }
                 }
-                }
-                    );
+                        }
+                    };
 
                 // TODO: wait to collect larger chunks
 
@@ -559,6 +569,7 @@ impl connector::Runner for NspawnRunner {
         // should send a SIGRTMIN+3 to the container's PID1, which will initiate
         // an orderly shutdown:
         if let Some(pid) = job.nspawn_proc.id() {
+            println!("Sending SIGTERM to nspawn process...");
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid.try_into().unwrap()),
                 nix::sys::signal::Signal::SIGTERM,
