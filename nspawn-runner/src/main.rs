@@ -24,6 +24,8 @@ struct NspawnRunnerArgs {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentZfsRootConfig {
+    // Should contain full filesystem snapshot spec
+    clone_from: Option<String>,
     parent: String,
     mount_base: String,
     quota: Option<String>,
@@ -94,7 +96,12 @@ impl NspawnRunner {
         zfs_root_cfg: &NspawnRunnerEnvironmentZfsRootConfig,
     ) -> Result<(PathBuf, String), String> {
         let mut zfs_create_cmd = vec![
-            "create".to_string(),
+            (if zfs_root_cfg.clone_from.is_some() {
+                "clone"
+            } else {
+                "new"
+            })
+            .to_string(),
             "-o".to_string(),
             "mountpoint=legacy".to_string(),
         ];
@@ -102,6 +109,10 @@ impl NspawnRunner {
         if let Some(quota) = &zfs_root_cfg.quota {
             zfs_create_cmd.push("-o".to_string());
             zfs_create_cmd.push(format!("quota={}", quota));
+        }
+
+        if let Some(ref source_fs) = zfs_root_cfg.clone_from {
+            zfs_create_cmd.push(source_fs.clone());
         }
 
         let zfs_fs = format!("{}/{}", zfs_root_cfg.parent, job_id.to_string());
