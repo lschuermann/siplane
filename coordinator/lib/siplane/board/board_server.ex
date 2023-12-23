@@ -1,6 +1,7 @@
 defmodule Siplane.Board.Server.JobState do
   defstruct [
-    state: {:wait_for_start, DateTime.utc_now()},
+    coord_state: {:wait_for_start, DateTime.utc_now()},
+    runner_state: nil,
     # Log of individual lines, reversed (newest to oldest)
     runner_log: [],
   ]
@@ -76,7 +77,7 @@ defmodule Siplane.Board.Server do
       |> List.foldl(
 	{false, state},
 	fn {job_id, job}, {jobs_changed, state} ->
-	  case job.state do
+	  case job.coord_state do
 	    {:wait_for_start, t} ->
 	      if :lt = DateTime.compare(DateTime.add(t, 5, :second), DateTime.utc_now()) do
 		{true, complete_jobs(state, [job_id], :runner_timeout)}
@@ -128,7 +129,7 @@ defmodule Siplane.Board.Server do
 	      :runner_msg,
 	      %{
 		type: :start_job,
-		id: UUID.binary_to_string!(job_id),
+		job_id: UUID.binary_to_string!(job_id),
 		environment_id: job.environment_id,
 		ssh_keys: []
 	      }
@@ -255,6 +256,68 @@ defmodule Siplane.Board.Server do
       },
       state,
     }
+  end
+
+  @impl true
+  def handle_call({:update_job_state, job_id, new_runner_state}, _from, state) do
+    case Map.get(state.active_jobs, job_id) do
+      nil ->
+	{:reply, {:error, :job_not_active}, state}
+
+      job_state ->
+	act =
+	  case {job_state.coord_state, new_runner_state.state} do
+	    {{:wait_for_start, _}, :starting} ->
+	      {:ok, {:starting, DateTime.utc_now()}}
+	    {{:wait_for_start, _}, :ready} ->
+	      {:ok, :ready}
+	    {{:starting, ts}, :starting} ->
+	      {:ok, {:starting, ts}}
+	    {{:starting, _}, :ready} ->
+	      {:ok, :ready}
+	    {:ready, :ready} ->
+	      {:ok, :ready}
+	    {_, :stopping} ->
+	      {:ok, {:stopping, DateTime.utc_now()}}
+	    {_, :finished} ->
+	      {:remove, :finished}
+	    {_, :failed} ->
+	      {:remove, :failed}
+	  end
+
+	notify_board_update(state, :jobs)
+
+	state =
+	  case act do
+	    {:ok, new_coord_state} ->
+	      new_jobs = Map.put(state.active_jobs, job_id, %{ job_state | coord_state: new_coord_state, runner_state: new_runner_state })
+	      %{ state | active_jobs: new_jobs }
+	    {:remove, completion_code} ->
+	      complete_jobs(state, [job_id], completion_code)
+	  end
+
+	state = schedule_jobs(state)
+
+	{:reply, :ok, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:terminate_job, job_id}, _from, state) do
+    # Tell the runner:
+    send(
+      state.runner_pid, {
+	:board_event,
+	state.board_id,
+	:runner_msg,
+	%{
+	  type: :stop_job,
+	  job_id: UUID.binary_to_string!(job_id),
+	}
+      }
+    )
+
+    {:reply, :ok, state}
   end
 
   @impl true

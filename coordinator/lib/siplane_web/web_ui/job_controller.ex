@@ -8,44 +8,26 @@ defmodule SiplaneWeb.WebUI.JobController do
     SiplaneWeb.WebUI.PageHTML.job(assigns)
   end
 
-  # def index(conn, _params) do
-  #   boards = Siplane.Repo.all(Siplane.Board)
-  #   |> Enum.map(fn board ->
-  #     Map.from_struct(board)
-  #     |> Map.put(:runner_connected, Siplane.Board.runner_connected?(board.id))
-  #   end)
-
-  #   conn
-  #   |> render(:boards, %{ boards: boards })
-  # end
-
-  # def show(conn, %{"id" => board_id_str} = _params) do
-  #   case UUID.info(board_id_str) do
-  #     {:error, _} ->
-  # 	conn
-  # 	|> put_status(:bad_request)
-  # 	|> put_view(SiplaneWeb.WebUI.ErrorHTML)
-  # 	|> render("400.html")
-
-  #     {:ok, parsed_board_id} ->
-  # 	binary_board_id =
-  # 	  Keyword.get(parsed_board_id, :binary)
-  # 	  |> Ecto.UUID.load!
-
-  # 	board = Siplane.Repo.one!(
-  # 	  from b in Siplane.Board, where: b.id == ^binary_board_id)
-
-  # 	board = Map.put board, :runner_connected, Siplane.Board.runner_connected?(board.id)
-
-  # 	conn
-  # 	|> render(:board, %{ board: board })
-  #   end
-  # end
+  # TODO!
 end
 
 defmodule SiplaneWeb.WebUI.JobController.Live do
   use SiplaneWeb, :live_view
   import Ecto.Query
+
+  defp update_job_state(socket) do
+    ecto_job_id = Ecto.UUID.load!(socket.assigns.job_id)
+
+    # Query job information:
+    socket =
+      socket
+      |> assign(job: (
+	  Siplane.Repo.one!(
+	    from j in Siplane.Job, where: j.id == ^ecto_job_id
+	  )
+	  |> Siplane.Repo.preload(:board)
+	))
+  end
 
   @impl true
   def render(assigns) do
@@ -65,13 +47,47 @@ defmodule SiplaneWeb.WebUI.JobController.Live do
 
       {:ok, parsed_job_id} ->
 	job_id = Keyword.get(parsed_job_id, :binary)
-	ecto_job_id = Ecto.UUID.load!(job_id)
+	socket = assign(socket, job_id: job_id)
+
+	socket = update_job_state(socket)
+
+	# Subscribe to log messages
+	:ok = Siplane.Job.subscribe job_id
 
 	{
 	  :ok,
-	  socket,
+	  assign(
+	    socket,
+	    log_events: Siplane.Job.job_log(job_id),
+	    # Fetch initial console log
+	    console_log: "",
+	  ),
 	}
     end
   end
 
+  @impl true
+  def handle_info({:job_event, _job_id, :log_event, event}, socket) do
+    {
+      :noreply,
+      assign(
+	socket,
+	log_events: [ event | socket.assigns.log_events ]
+      )
+    }
+  end
+
+  @impl true
+  def handle_info({:job_event, _job_id, :console_log_event, event}, socket) do
+    {
+      :noreply,
+      push_event(socket, "console-log-msg", %{msg: event})
+    }
+  end
+
+  @impl true
+  def handle_event("terminate_job", _params, socket) do
+    Siplane.Job.terminate_job socket.assigns.job_id
+    { :noreply, socket }
+  end
 end

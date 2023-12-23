@@ -22,8 +22,23 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 
+let Hooks = {}
+Hooks.Terminal = {
+    mounted() {
+	// Custom:
+	console.log("mounted new!")
+	var term = new Terminal({
+	    disableStdin: true,
+	    cursorBlink: false,
+	});
+	term.open(document.getElementById('terminal'));
+	this.handleEvent("console-log-msg", ({msg}) => term.write(msg))
+	// term.write('Hello from \x1B[1;3;31mxterm.js\x1B[0m $ ')
+    }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-let liveSocket = new LiveSocket("/live", Socket, {params: {_csrf_token: csrfToken}})
+let liveSocket = new LiveSocket("/live", Socket, {params: {_csrf_token: csrfToken}, hooks: Hooks})
 
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})

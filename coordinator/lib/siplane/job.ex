@@ -33,6 +33,7 @@ defmodule Siplane.Job do
 
     belongs_to :board, Siplane.Board
     belongs_to :environment, Siplane.Board
+    has_one :creator, Siplane.User
   end
 
   @doc false
@@ -158,20 +159,80 @@ defmodule Siplane.Job do
     end
   end
 
-  def instant_job(board_id, environment_id) do
+  def instant_job(board_id, environment_id, label \\ nil) do
     Siplane.Board.validate_board_id(board_id)
     # TODO: validate environment ID
 
-    Siplane.Repo.insert!(
+    job = Siplane.Repo.insert!(
       %Siplane.Job{
 	start: DateTime.truncate(DateTime.utc_now(), :second),
 	dispatched: false,
 	board_id: Ecto.UUID.load!(board_id),
 	environment_id: Ecto.UUID.load!(environment_id),
+	label: label,
       }
     )
 
     Siplane.Board.jobs_updated(board_id)
+
+    {:ok, job}
+  end
+
+  def terminate_job(job_id) do
+    validate_job_id(job_id)
+    case Registry.lookup(__MODULE__.BoardRegistry, job_id) do
+      [{pid, _val}] -> GenServer.call(pid, {:terminate_job, job_id})
+      [] -> {:err, :job_not_active}
+    end
+  end
+
+  # Subscribe to events related to a board
+  def subscribe(job_id) do
+    validate_job_id(job_id)
+    {:ok, _} = Registry.register(__MODULE__.SubscriberRegistry, job_id, nil)
+    :ok
+  end
+
+  # Retrieve a given number of log messages related to jobs.
+  #
+  # When nil == 0, this loads all log messages related to this job.
+  def job_log(job_id, limit \\ 50) do
+    validate_job_id(job_id)
+    ecto_job_id = Ecto.UUID.load! job_id
+
+    query = from jl in Siplane.Job.LogEvent,
+      join: l in assoc(jl, :log_event),
+      where: jl.job_id == ^ecto_job_id,
+      order_by: [desc: l.inserted_at]
+
+    query =
+      if !is_nil(limit) do
+	limit(query, ^limit)
+      else
+	query
+      end
+
+    Siplane.Repo.all(query)
+    |> Siplane.Repo.preload(:log_event)
+    |> Enum.map(fn job_log_event -> job_log_event.log_event end)
+  end
+
+  # Called with the JSON body payload for /api/runner/v0/job/:id/state:
+  #
+  # TODO: validate payload!
+  def update_job_state(job_id, state) do
+    validate_job_id(job_id)
+    case Registry.lookup(__MODULE__.BoardRegistry, job_id) do
+      [{pid, _val}] -> GenServer.call(pid, {:update_job_state, job_id, state})
+      [] -> {:err, :job_not_found}
+    end
+  end
+
+  def put_console_log(job_id, _offset, _next, log) do
+    validate_job_id(job_id)
+    Registry.dispatch(__MODULE__.SubscriberRegistry, job_id, fn subscribers ->
+      for {pid, _} <- subscribers, do: send(pid, {:job_event, job_id, :console_log_event, log})
+    end)
   end
 
   # ----- Supervisor Implementation --------------------------------------------

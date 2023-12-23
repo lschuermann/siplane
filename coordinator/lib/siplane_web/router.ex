@@ -44,6 +44,9 @@ defmodule SiplaneWeb.Router do
 
     put "/boards/:id/state", API.Runner.V0.BoardController, :update_state
     get "/boards/:id/sse", API.Runner.V0.BoardController, :sse_conn
+
+    put "/jobs/:id/state", API.Runner.V0.JobController, :update_state
+    put "/jobs/:id/console", API.Runner.V0.JobController, :put_console_log
   end
 
   # Other scopes may use custom stacks.

@@ -108,6 +108,7 @@ defmodule Siplane.Repo.Migrations.Init do
     create table(:jobs, primary_key: false) do
       add :id, :binary_id, primary_key: true, null: false
       add :label, :string
+      add :creator, references(:users, type: :binary_id)
 
       add :start, :utc_datetime, null: false
       # Jobs may not have a defined end, in which case the earliest
@@ -124,6 +125,14 @@ defmodule Siplane.Repo.Migrations.Init do
       add :environment_id, references(:environments, type: :binary_id), null: false
 
       timestamps(type: :utc_datetime)
+    end
+
+    create table(:log_event_jobs, primary_key: false) do
+      add :log_event_id, references(:log_events, type: :binary_id), primary_key: true
+      add :job_id, references(:jobs, type: :binary_id), primary_key: true
+
+      add :public, :bool, null: false
+      add :creator_visible, :bool, null: false
     end
   end
 end

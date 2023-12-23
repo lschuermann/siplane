@@ -54,6 +54,7 @@ defmodule Siplane.MixProject do
       {:uuid, "~> 1.1"},
       {:ueberauth, "~> 0.7.0"},
       {:ueberauth_github, "~> 0.8.1"},
+      {:tarams, "~> 1.8.0"},
     ]
   end
 

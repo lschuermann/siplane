@@ -126,6 +126,14 @@ defmodule Siplane.Board do
     end)
   end
 
+  # # Whenever a runner posts a state update for a job:
+  # def update_job_state(board_id, job_id, state) do
+  #   case Registry.lookup(__MODULE__.Server.Registry, board_id) do
+  #     [{pid, _}] -> GenServer.call(pid, {:update_job_state, :job_id, state})
+  #     _ -> {:err, :board_server_not_found}
+  #   end
+  # end
+
   # ----- Private API ----------------------------------------------------------
 
   def validate_board_id(board_id) do

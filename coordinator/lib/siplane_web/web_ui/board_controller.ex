@@ -56,13 +56,16 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
     # receive log messages.
     socket =
       socket
-      |> assign(board: Siplane.Repo.one!(
-	  from b in Siplane.Board, where: b.id == ^ecto_board_id
+      |> assign(board: (
+	  Siplane.Repo.one!(
+	    from b in Siplane.Board, where: b.id == ^ecto_board_id
+	  )
+	  |> Siplane.Repo.preload(:environments)
 	))
       |> assign(runner_connected: Siplane.Board.runner_connected?(socket.assigns.board_id))
-      |> assign(pending_jobs: Siplane.Job.pending_jobs(board_id: socket.assigns.board_id, limit: 10))
+      |> assign(pending_jobs: Siplane.Job.pending_jobs(board_id: socket.assigns.board_id, limit: 5))
       |> assign(active_jobs: Siplane.Job.active_jobs(board_id: socket.assigns.board_id))
-      |> assign(completed_jobs: Siplane.Job.completed_jobs(board_id: socket.assigns.board_id, limit: 50))
+      |> assign(completed_jobs: Siplane.Job.completed_jobs(board_id: socket.assigns.board_id, limit: 10))
   end
 
   @impl true
@@ -99,7 +102,7 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
 	  assign(
 	    socket,
 	    board_id: board_id,
-	    form: to_form(%{}),
+	    create_job_form: to_form(%{ "environment_id" => "", "label" => "" }),
 	    log_events: Siplane.Board.board_log(board_id)
 	  )
 	}
@@ -127,17 +130,55 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
     {:noreply, socket}
   end
 
-  # @impl true
-  # def handle_event("new-job", _, socket) do
-  #   # IO.puts("New job!")
+  @impl true
+  def handle_event("save_create_job", params, socket) do
+    { :noreply, assign(socket, create_job_form: to_form(params)) }
+  end
 
-  #   # TODO: request creation of a proper job object which then
-  #   # schedules itself on a board, etc. For now, lets just send a
-  #   # message to the SSE channel quick and dirty.
-  #   IO.puts "New code!"
-  #   IO.inspect(socket.assigns.board_id)
-  #   {:ok, _job_id} = Siplane.Board.new_instant_job(socket.assigns.board_id, "nixos_dev", "v1.0")
+  @impl true
+  def handle_event("create_job", %{"environment_id" => environment_id_str, "label" => job_label} = params, socket) do
+    # First, save the form params. If we're returning an error, we
+    # don't want to clear the contents:
+    socket = assign(socket, create_job_form: to_form(params))
 
-  #   {:noreply, socket}
-  # end
+    with {:ok, parsed_env_id} = UUID.info(environment_id_str),
+         env_id = Keyword.get(parsed_env_id, :binary),
+         ecto_env_id = Ecto.UUID.load!(env_id),
+	 true = Siplane.Repo.exists?(from(e in Siplane.Environment, where: e.id == ^ecto_env_id)) do
+
+      # Start job:
+      job_label = if job_label != "", do: job_label, else: nil
+      {:ok, job} = Siplane.Job.instant_job(socket.assigns.board_id, env_id, job_label)
+
+      {
+	:noreply,
+	socket
+	|> put_flash(:info, "Started job!")
+	|> push_navigate(to: "/jobs/#{job.id}")
+      }
+    else
+      {:error, _} ->
+	{:noreply, put_flash(socket, :error, "Select valid environment!")}
+    end
+  end
+
+  @impl true
+  def handle_event("create_job", params, socket) do
+    socket =
+      socket
+      |> put_flash(:error, "Select a valid job environment to start a new job!")
+      |> assign(create_job_form: to_form(params))
+    {:noreply, socket}
+  end
+
+
+    # # TODO: request creation of a proper job object which then
+    # # schedules itself on a board, etc. For now, lets just send a
+    # # message to the SSE channel quick and dirty.
+    # IO.puts "New code!"
+    # IO.inspect(socket.assigns.board_id)
+    # {:ok, _job_id} = Siplane.Board.new_instant_job(socket.assigns.board_id, "nixos_dev", "v1.0")
+
+    # {:noreply, socket}
+
 end

@@ -1,90 +1,180 @@
-<%= if @board.image_url do %>
-<img class="h-auto max-w-full rounded-lg px-2 pb-2 pt-4 mb-4" src={@board.image_url} alt="">
-<% end %>
-<h2 class="pb-2 text-xl"><%= @board.label %></h2>
-<%= if @runner_connected do %>
-Connected
-<% else %>
-Disconnected
-<% end %>
-<p><%= @board.manufacturer %> <%= @board.model %></p>
-<%= if @board.hwrev do %>
-<p>Hardware revision: <%= @board.hwrev %></p>
-<% end %>
-<p>Location: <%= @board.location %></p>
+<div class="flow-root mb-6">
+  <h1 class="float-left text-5xl font-extrabold dark:text-white">
+    <%= @board.label %>
+  </h1>
+  <%= if @runner_connected do %>
+    <span class="float-right bg-green-100 text-green-800 text-2xl font-semibold me-2 px-2.5 py-0.5 rounded dark:bg-green-200 dark:text-green-800 ms-2">
+      Connected
+    </span>
+  <% else %>
+    <span class="float-right bg-red-100 text-red-800 text-2xl font-semibold me-2 px-2.5 py-0.5 rounded dark:bg-red-200 dark:text-red-800 ms-2">
+      Disconnected
+    </span>
+  <% end %>
+</div>
 
-<h2 class="pb-2 text-3xl">New Job</h2>
-Create new instant job:
-<.form for={@form} phx-submit="new-job">
-  <button>!</button>
+<div class="mb-10 grid grid-cols-3 divide-x max-w p-6 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700 dark:hover:bg-gray-700">
+  <div class="col-span-2">
+    <p class="text-2xl font-extrabold dark:text-white">
+      <%= @board.manufacturer %>
+    </p>
+    <p class="mb-6 text-2xl font-extrabold dark:text-white">
+      <%= @board.model %>
+    </p>
+
+    <div class="relative overflow-x-auto">
+      <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+	<%= if @board.hwrev do %>
+	  <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+            <th scope="row" class="px-6 py-4">
+              Hardware Revision:
+            </th>
+            <td class="px-6 py-4 font-bold text-gray-900 whitespace-nowrap dark:text-white">
+              <%= @board.hwrev %>
+            </td>
+          </tr>
+	<% end %>
+
+	<tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+          <th scope="row" class="px-6 py-4">
+            Location:
+          </th>
+          <td class="px-6 py-4 font-bold text-gray-900 whitespace-nowrap dark:text-white">
+            <%= @board.location %>
+          </td>
+        </tr>
+
+        <tr class="bg-white dark:bg-gray-800 dark:border-gray-700">
+          <th scope="row" class="px-6 py-4">
+            Admins:
+          </th>
+          <td class="px-6 py-4 font-bold text-gray-900 whitespace-nowrap dark:text-white">
+            TODO implement!
+          </td>
+        </tr>
+      </table>
+    </div>
+  </div>
+  <%= if @board.image_url do %>
+    <div>
+      <img class="float-right object-contain h-72 w-72 rounded-lg" src={@board.image_url} alt="">
+    </div>
+  <% end %>
+</div>
+
+<hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
+<h2 class="mb-4 text-3xl font-bold dark:text-white">Create New Job</h2>
+<.form for={@create_job_form} phx-submit="create_job" method="post">
+  <div class="grid grid-cols-2 divide-x">
+    <div class="px-4">
+      <label for="environment_id" class="block mb-2 font-medium text-gray-900 dark:text-white">Job Environment</label>
+      <.input field={@create_job_form[:environment_id]} type="select" size={1 + length(@board.environments)} class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
+	      options={[[key: "Choose environment", value: "", disabled: true] | Enum.map(@board.environments, fn env -> [key: env.label, value: env.id] end)]} />
+    </div>
+    <div class="px-4">
+      <div class="mb-6">
+        <label for="label" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Job Label</label>
+        <.input field={@create_job_form[:label]} type="text" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="Optional" />
+      </div>
+      <div class="mb-6 text-right">
+	<button type="submit" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm w-full sm:w-auto px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Make it so!</button>
+      </div>
+    </div>
+  </div>
 </.form>
 
-<h2 class="pb-2 text-3xl">Active Jobs</h2>
-<table>
-  <tr>
-    <th>Start</th>
-    <th>End</th>
-    <th>Label</th>
-    <th>Environment</th>
-  </tr>
-  <%= for job <- @active_jobs do %>
+<hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
+<h2 class="mb-4 text-3xl font-bold dark:text-white">Active Jobs</h2>
+<div class="relative overflow-x-auto shadow-md sm:rounded-lg">
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+  <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
     <tr>
-      <td><%= job.start %></td>
-      <td><%= job.end %></td>
-      <td><%= job.label %></td>
-      <td><%= job.environment_id %></td>
+      <th scope="col" class="px-6 py-3">Start</th>
+      <th scope="col" class="px-6 py-3">End</th>
+      <th scope="col" class="px-6 py-3">Label</th>
+      <th scope="col" class="px-6 py-3">Environment</th>
     </tr>
-  <% end %>
-</table>
-
-
-<h2 class="pb-2 text-3xl">Pending Jobs</h2>
-<table>
-  <tr>
-    <th>Start</th>
-    <th>End</th>
-    <th>Label</th>
-    <th>Environment</th>
-  </tr>
-  <%= for job <- @pending_jobs do %>
+  </thead>
+  <tbody>
+    <%= for job <- @active_jobs do %>
     <tr>
-      <td><%= job.start %></td>
-      <td><%= job.end %></td>
-      <td><%= job.label %></td>
-      <td><%= job.environment_id %></td>
+      <td scope="col" class="px-6 py-4"><a href={"/jobs/#{job.id}"}><%= job.start %></a></td>
+      <td class="px-6 py-4"><%= job.end %></td>
+      <td class="px-6 py-4"><%= job.label %></td>
+      <td class="px-6 py-4"><%= job.environment_id %></td>
     </tr>
-  <% end %>
+    <% end %>
+  </tbody>
 </table>
+</div>
 
-<h2 class="pb-2 text-3xl">Completed Jobs</h2>
-<table>
+<hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
+<h2 class="mb-4 text-3xl font-bold dark:text-white">Pending Jobs</h2>
+<div class="relative overflow-x-auto shadow-md sm:rounded-lg">
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+  <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+    <tr>
+      <th scope="col" class="px-6 py-3">Start</th>
+      <th scope="col" class="px-6 py-3">End</th>
+      <th scope="col" class="px-6 py-3">Label</th>
+      <th scope="col" class="px-6 py-3">Environment</th>
+    </tr>
+  </thead>
+  <tbody>
+    <%= for job <- @pending_jobs do %>
+    <tr>
+      <td scope="col" class="px-6 py-4"><a href={"/jobs/#{job.id}"}><%= job.start %></a></td>
+      <td scope="col" class="px-6 py-4"><%= job.end %></td>
+      <td scope="col" class="px-6 py-4"><%= job.label %></td>
+      <td scope="col" class="px-6 py-4"><%= job.environment_id %></td>
+    </tr>
+    <% end %>
+  </tbody>
+</table>
+</div>
+
+<hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
+<h2 class="mb-4 text-3xl font-bold dark:text-white">Completed Jobs</h2>
+<div class="relative overflow-x-auto shadow-md sm:rounded-lg">
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+  <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
   <tr>
-    <th>Start</th>
-    <th>End</th>
-    <th>Label</th>
-    <th>Completion Code</th>
+    <th scope="col" class="px-6 py-3">Start</th>
+    <th scope="col" class="px-6 py-3">End</th>
+    <th scope="col" class="px-6 py-3">Label</th>
+    <th scope="col" class="px-6 py-3">Completion Code</th>
   </tr>
+  </thead>
+  <tbody>
   <%= for job <- @completed_jobs do %>
     <tr>
-      <td><%= job.start %></td>
-      <td><%= job.end %></td>
-      <td><%= job.label %></td>
-      <td><%= job.completion_code %></td>
+      <td scope="col" class="px-6 py-4"><a href={"/jobs/#{job.id}"}><%= job.start %></a></td>
+      <td scope="col" class="px-6 py-4"><%= job.end %></td>
+      <td scope="col" class="px-6 py-4"><%= job.label %></td>
+      <td scope="col" class="px-6 py-4"><%= job.completion_code %></td>
     </tr>
-  <% end %>
+    <% end %>
+  </tbody>
 </table>
+</div>
 
-
-<h2 class="pb-2 text-3xl">Log</h2>
-<table>
+<hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
+<h2 class="mb-4 text-3xl font-bold dark:text-white">Log</h2>
+<div class="relative overflow-x-auto shadow-md sm:rounded-lg">
+<table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+  <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
   <tr>
-    <th>Timestamp</th>
-    <th>Message</th>
+    <th scope="col" class="px-6 py-3">Timestamp</th>
+    <th scope="col" class="px-6 py-3">Message</th>
   </tr>
+  </thead>
+  <tbody>
   <%= for message <- @log_events do %>
     <tr>
-      <td><%= message.inserted_at %></td>
-      <td><%= message.message %></td>
+      <td scope="col" class="px-6 py-4"><%= message.inserted_at %></td>
+      <td scope="col" class="px-6 py-4"><%= message.message %></td>
     </tr>
-  <% end %>
+    <% end %>
+  </tbody>
 </table>
+</div>

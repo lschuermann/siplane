@@ -4,27 +4,27 @@ defmodule SiplaneWeb.API.Runner.V0.BoardController do
 
   @sse_keepalive_timeout 15000
 
-  def update_state(conn, %{"id" => board_id_str}) do
-    # TODO: auth, validate payload, etc.
-    case UUID.info(board_id_str) do
-      {:error, _} ->
-	conn
-	|> put_status(:bad_request)
-	|> put_view(SiplaneWeb.API.ErrorView)
-	|> render("bad_request.json",
-	  description: "Provided board ID is not a valid UUID."
-	)
+  # def update_state(conn, %{"id" => board_id_str}) do
+  #   # TODO: auth, validate payload, etc.
+  #   case UUID.info(board_id_str) do
+  #     {:error, _} ->
+  # 	conn
+  # 	|> put_status(:bad_request)
+  # 	|> put_view(SiplaneWeb.API.ErrorView)
+  # 	|> render("bad_request.json",
+  # 	  description: "Provided board ID is not a valid UUID."
+  # 	)
 
-      {:ok, parsed_board_id} ->
-	board_id = Keyword.get(parsed_board_id, :binary)
+  #     {:ok, parsed_board_id} ->
+  # 	board_id = Keyword.get(parsed_board_id, :binary)
 
-	case conn.body_params["state"] do
-	  "idle" ->
-	    Siplane.Board.update_state(board_id, :idle)
-	    send_resp(conn, 204, "")
-	end
-    end
-  end
+  # 	case conn.body_params["state"] do
+  # 	  "idle" ->
+  # 	    Siplane.Board.update_state(board_id, :idle)
+  # 	    send_resp(conn, 204, "")
+  # 	end
+  #   end
+  # end
 
   def sse_conn(%{adapter: {Plug.Cowboy.Conn, cowboy_req}} = conn, %{"id" => board_id_str}) do
     case UUID.info(board_id_str) do
