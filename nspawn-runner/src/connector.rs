@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub mod sse_api {
     use uuid::Uuid;
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Debug, Clone)]
     #[serde(rename_all = "snake_case")]
     #[serde(tag = "type")]
     pub enum SSEMessage {
@@ -25,7 +25,7 @@ pub mod sse_api {
 }
 
 pub mod rest_api {
-    #[derive(Serialize)]
+    #[derive(Serialize, Debug, Clone)]
     #[serde(rename_all = "snake_case")]
     pub enum JobStartingStage {
         /// Acquiring resources, such as the root file system, to launch the
@@ -41,7 +41,7 @@ pub mod rest_api {
         Booting,
     }
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Debug, Clone)]
     #[serde(rename_all = "snake_case")]
     pub enum JobSessionConnectionInfo {
         DirectSSH {
@@ -51,7 +51,7 @@ pub mod rest_api {
         },
     }
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Debug, Clone)]
     #[serde(tag = "state")]
     #[serde(rename_all = "snake_case")]
     pub enum JobState {
@@ -83,12 +83,26 @@ pub mod rest_api {
 }
 
 #[async_trait]
-pub trait Runner {
+pub trait Runner: Send + Sync + 'static {
     async fn start_job(this: &Arc<Self>, job_id: Uuid, environment_id: Uuid, ssh_keys: Vec<String>);
     async fn stop_job(this: &Arc<Self>, job_id: Uuid);
 }
 
-pub struct RunnerConnector<R: Runner> {
+#[async_trait]
+pub trait RunnerConnector: Send + Sync + 'static {
+    async fn run(&self);
+    async fn post_job_state(&self, job_id: Uuid, job_state: rest_api::JobState);
+    async fn send_job_console_log(
+        &self,
+        job_id: Uuid,
+        offset: usize,
+        next: usize,
+        stdio_map: &[(rest_api::StdioFd, usize)],
+        console_bytes: Vec<u8>,
+    );
+}
+
+pub struct SSERunnerConnector<R: Runner> {
     coord_url: String,
     board_id: Uuid,
     keepalive_timeout: Duration,
@@ -97,7 +111,7 @@ pub struct RunnerConnector<R: Runner> {
     client: reqwest::Client,
 }
 
-impl<R: Runner> RunnerConnector<R> {
+impl<R: Runner> SSERunnerConnector<R> {
     pub fn new(
         coord_url: String,
         board_id: Uuid,
@@ -105,7 +119,7 @@ impl<R: Runner> RunnerConnector<R> {
         keepalive_timeout: Duration,
         reconnect_wait: Duration,
     ) -> Self {
-        RunnerConnector {
+        SSERunnerConnector {
             coord_url,
             board_id,
             keepalive_timeout,
@@ -115,7 +129,49 @@ impl<R: Runner> RunnerConnector<R> {
         }
     }
 
-    pub async fn run(&self) {
+    async fn handle_sse_event(&self, ev: Event, runner: &Arc<R>) {
+        use sse_api::SSEMessage;
+
+        match ev.event_type.as_str() {
+            "message" => {
+                match serde_json::from_str::<SSEMessage>(&ev.data) {
+                    Ok(SSEMessage::UpdateState) => {
+                        // runner.send_state_update().await;
+                    }
+
+                    Ok(SSEMessage::StartJob {
+                        job_id,
+                        environment_id,
+                        ssh_keys,
+                    }) => {
+                        R::start_job(runner, job_id, environment_id, ssh_keys).await;
+                    }
+
+                    Ok(SSEMessage::StopJob { job_id }) => {
+                        R::stop_job(runner, job_id).await;
+                    }
+
+                    Err(e) => {
+                        println!("Unable to parse SSE message \"{}\": {:?}", ev.data, e);
+                    }
+                }
+            }
+
+            "close" => {
+                println!(
+                    "Server closed connection, last will and testament: {}",
+                    ev.data
+                );
+            }
+
+            _ => println!("Unknown event type {}!", ev.event_type),
+        }
+    }
+}
+
+#[async_trait]
+impl<R: Runner> RunnerConnector for SSERunnerConnector<R> {
+    async fn run(&self) {
         // Acquire a "strong" Arc<> reference to the runner. Not holding onto a
         // strong reference beyond invocations of "run" will ensure that the
         // contained runner can be deallocated properly.
@@ -183,46 +239,7 @@ impl<R: Runner> RunnerConnector<R> {
         }
     }
 
-    async fn handle_sse_event(&self, ev: Event, runner: &Arc<R>) {
-        use sse_api::SSEMessage;
-
-        match ev.event_type.as_str() {
-            "message" => {
-                match serde_json::from_str::<SSEMessage>(&ev.data) {
-                    Ok(SSEMessage::UpdateState) => {
-                        // runner.send_state_update().await;
-                    }
-
-                    Ok(SSEMessage::StartJob {
-                        job_id,
-                        environment_id,
-                        ssh_keys,
-                    }) => {
-                        R::start_job(runner, job_id, environment_id, ssh_keys).await;
-                    }
-
-                    Ok(SSEMessage::StopJob { job_id }) => {
-                        R::stop_job(runner, job_id).await;
-                    }
-
-                    Err(e) => {
-                        println!("Unable to parse SSE message \"{}\": {:?}", ev.data, e);
-                    }
-                }
-            }
-
-            "close" => {
-                println!(
-                    "Server closed connection, last will and testament: {}",
-                    ev.data
-                );
-            }
-
-            _ => println!("Unknown event type {}!", ev.event_type),
-        }
-    }
-
-    pub async fn post_job_state(&self, job_id: Uuid, job_state: rest_api::JobState) {
+    async fn post_job_state(&self, job_id: Uuid, job_state: rest_api::JobState) {
         self.client
             .put(&format!(
                 "{}/api/runner/v0/jobs/{}/state",
@@ -235,7 +252,7 @@ impl<R: Runner> RunnerConnector<R> {
             .unwrap();
     }
 
-    pub async fn send_job_console_log(
+    async fn send_job_console_log(
         &self,
         job_id: Uuid,
         offset: usize,

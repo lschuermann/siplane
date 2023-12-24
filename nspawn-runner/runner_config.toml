@@ -5,8 +5,9 @@ keepalive_timeout = 60
 reconnect_wait = 10
 
 [environments.c4e08e00-cfb0-46d1-83eb-ee62e128cc70]
-init = "/nix/store/l13zllb1vpxy8q7r4hlpwxxn1rl0kzs2-nixos-system-si-pton-arty35-0-23.11.git.b4372c4924d9/init"
+init = "/nix/store/y3h62baa8lpcxjh48pbf4y870944jxqf-nixos-system-si-pton-arty35-0-23.05.git.1a3c95e3b23b/init"
 shutdown_timeout = 30
+control_socket_path = "/siplane-ctrl"
 
 [[environments.c4e08e00-cfb0-46d1-83eb-ee62e128cc70.mount]]
 src = "/nix/store"

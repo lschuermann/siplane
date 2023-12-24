@@ -3,10 +3,15 @@ use std::collections::HashMap;
 #[macro_use]
 extern crate serde;
 
+use log::{debug, info, warn};
+use simplelog::{TermLogger, Config as SimpleLogConfig, TerminalMode, ColorChoice, LevelFilter};
+use anyhow::{Context,Result};
 use async_trait::async_trait;
 use clap::Parser;
 use serde::Deserialize;
-use std::path::PathBuf;
+use tokio::io::BufReader;
+use tokio::net::UnixDatagram;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
@@ -14,12 +19,18 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 mod connector;
+mod test_connector;
+mod control_socket;
 
 #[derive(Parser, Debug, Clone)]
 struct NspawnRunnerArgs {
     /// Path to the TOML configuration file
     #[arg(short, long)]
     config_file: PathBuf,
+
+    /// Whether to test-start a given environment
+    #[arg(long)]
+    test_env: Option<Uuid>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -44,6 +55,7 @@ pub struct NspawnRunnerEnvironmentConfig {
     shutdown_timeout: u64,
     mount: Vec<NspawnRunnerEnvironmentMountConfig>,
     zfsroot: Option<NspawnRunnerEnvironmentZfsRootConfig>,
+    control_socket_path: PathBuf,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -61,9 +73,10 @@ pub struct NspawnRunnerJob {
     _environment_id: Uuid,
     environment_config: NspawnRunnerEnvironmentConfig,
     _ssh_keys: Vec<String>,
-    nspawn_proc: tokio::process::Child,
+    nspawn_proc: Arc<Mutex<tokio::process::Child>>,
     console_streamer_handle: tokio::task::JoinHandle<()>,
     console_streamer_cmd_chan: tokio::sync::mpsc::Sender<ConsoleStreamerCommand>,
+    control_socket: control_socket::ControlSocket<NspawnRunner>,
 
     // Pointers to created resources, to delete when shutting down (if not
     // indicated otherwise):
@@ -72,14 +85,14 @@ pub struct NspawnRunnerJob {
 }
 
 pub struct NspawnRunner {
-    connector: Arc<connector::RunnerConnector<Self>>,
+    connector: Arc<dyn connector::RunnerConnector>,
     current_job: Mutex<Option<NspawnRunnerJob>>,
     config: NspawnRunnerConfig,
 }
 
 impl NspawnRunner {
     pub fn new(
-        connector: Arc<connector::RunnerConnector<Self>>,
+        connector: Arc<dyn connector::RunnerConnector>,
         config: NspawnRunnerConfig,
     ) -> Self {
         NspawnRunner {
@@ -213,6 +226,7 @@ impl NspawnRunner {
     }
 }
 
+#[derive(Clone, Debug)]
 enum ConsoleStreamerCommand {
     Shutdown,
 }
@@ -312,6 +326,23 @@ impl connector::Runner for NspawnRunner {
             }
         };
 
+	// Create the control socket in the container's root path.
+
+	// Get the absolute path to the socket (convert `control_socket_path`
+	// into relative, then join with the `root_fs_mountpoint`):
+	let control_socket_path_rel = environment_cfg.control_socket_path
+	    .strip_prefix("/")
+	    .unwrap_or(&environment_cfg.control_socket_path);
+	let control_socket_path_abs = root_fs_mountpoint.join(control_socket_path_rel);
+	// Make sure that the final path is within the container:
+	assert!(control_socket_path_abs.starts_with(&root_fs_mountpoint));
+
+	// Start the control socket handler and create a new UNIX SeqPacket socket:
+	let control_socket = control_socket::ControlSocket::new_unix_seqpacket(
+	    &control_socket_path_abs, this.clone()
+	).await
+	    .with_context(|| format!("Creating control socket under \"{:?}\"", control_socket_path_abs)).unwrap();
+
         // All resources have been allocated, mark the container as booting:
         this.connector
             .post_job_state(
@@ -387,17 +418,20 @@ impl connector::Runner for NspawnRunner {
 
         // Acquire the stdout and stderr pipes, and spawn a new log-streamer
         // task that collects all log output and streams it to the coordinator:
-        let stdout = child
+        let mut stdout = child
             .stdout
             .take()
             .expect("Failed to acquire stdout from child process");
-        let stderr = child
+        let mut stderr = child
             .stderr
             .take()
             .expect("Failed to acquire stderr from child process");
 
+	let child = Arc::new(Mutex::new(child));
+
         let this_streamer = this.clone();
         let (streamer_chan_tx, mut streamer_chan_rx) = tokio::sync::mpsc::channel(1);
+	let streamer_child = child.clone();
         let console_streamer = tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let this = this_streamer;
@@ -413,45 +447,69 @@ impl connector::Runner for NspawnRunner {
             let _console_queue_sent = 0;
 
             let mut stdout_buf = [0; 64 * 1024];
+	    let mut stdout_closed = false;
             let mut stderr_buf = [0; 64 * 1024];
+	    let mut stderr_closed = false;
+
+	    enum ReadConsoleRes {
+		ZeroBytes,
+		Data,
+		Shutdown,
+		Error(std::io::Error),
+	    }
 
             loop {
                 // TODO: force buf flush on timeout?
                 let res = tokio::select! {
-                        read_res = stdout_reader.read(&mut stdout_buf) => {
-                            match read_res {
-                    Ok(read_len) => {
-                    console_queue.push_back((connector::rest_api::StdioFd::Stdout, stdout_buf[..read_len].to_vec()));
-                    Ok(false)
+                    streamer_cmd_opt = streamer_chan_rx.recv() => {
+			match streamer_cmd_opt {
+			    Some(ConsoleStreamerCommand::Shutdown) => ReadConsoleRes::Shutdown,
+			    None => {
+				panic!("Streamer command channel TX dropped!");
+			    }
+			}
                     }
-                    Err(e) => Err(e),
-                }
-                        }
 
-                        read_res = stderr_reader.read(&mut stderr_buf) => {
-                match read_res {
-                                Ok(read_len) => {
-                    console_queue.push_back((connector::rest_api::StdioFd::Stderr, stderr_buf[..read_len].to_vec()));
-                    Ok(false)
-                    },
-                    Err(e) => Err(e),
-                            }
-                        }
-
-                        streamer_cmd_opt = streamer_chan_rx.recv() => {
-                match streamer_cmd_opt {
-                    Some(ConsoleStreamerCommand::Shutdown) => Ok(true),
-                    None => {
-                    panic!("Streamer command channel TX dropped!");
+                    read_res = stdout_reader.read(&mut stdout_buf), if !stdout_closed => {
+                        match read_res {
+			    Ok(0) => {
+				// Mark as closed, so we don't loop reading zero bytes:
+				stdout_closed = true;
+				ReadConsoleRes::ZeroBytes
+			    },
+			    Ok(read_len) => {
+				console_queue.push_back((
+				    connector::rest_api::StdioFd::Stdout,
+				    stdout_buf[..read_len].to_vec()
+				));
+				ReadConsoleRes::Data
+			    }
+			    Err(e) => ReadConsoleRes::Error(e),
+			}
                     }
-                }
-                        }
-                    };
 
-                // TODO: wait to collect larger chunks
+                    read_res = stderr_reader.read(&mut stderr_buf), if !stderr_closed => {
+			match read_res {
+			    Ok(0) => {
+				// Mark as closed, so we don't loop reading zero bytes:
+				stderr_closed = true;
+				ReadConsoleRes::ZeroBytes
+			    },
+                            Ok(read_len) => {
+				console_queue.push_back((
+				    connector::rest_api::StdioFd::Stderr,
+				    stderr_buf[..read_len].to_vec()
+				));
+				ReadConsoleRes::Data
+			    },
+			    Err(e) => ReadConsoleRes::Error(e),
+                        }
+                    }
+
+                };
 
                 match res {
-                    Ok(false) => {
+                    ReadConsoleRes::Data => {
                         // TODO: this simply assumes that a single buffer
                         // element has been appended to the VecDeque:
                         let (stdio_fd, buf) = console_queue.back().unwrap();
@@ -468,13 +526,65 @@ impl connector::Runner for NspawnRunner {
                         console_queue_offset += 1;
                     }
 
-                    Ok(true) => {
+                    ReadConsoleRes::Shutdown => {
                         // Asked to shut down. Once we implement chunking, do
                         // one last flush to the coordinator.
+			debug!("Shutting down console log streamer.");
                         break;
                     }
 
-                    Err(e) => {
+		    ReadConsoleRes::ZeroBytes => {
+			info!("Handling ZeroBytes case, acquiring lock...");
+			// Reading zero bytes is an indication that the process
+			// might've exited. Check whether this is the case. If
+			// the process has died, perform one last read and
+			// invoke the shutdown code for this job. Prior to that
+			// we must release the child lock! This code path may
+			// also be invoked while the process is already shutting
+			// down (e.g. because of an invocation of
+			// `stop_job`). In this case, simply attempt another
+			// loop iteration and don't attempt to stop the job
+			// again (as this would result in a deadlock).
+			let mut child = streamer_child.try_lock();
+
+			let exited = match child.as_mut().map(|c| c.try_wait()) {
+			    // We have the lock, and the child has exited:
+			    Ok(Ok(Some(_))) => true,
+			    // We have the lock, but the child has not exited:
+			    Ok(Ok(None)) => false,
+			    // We have the lock, but couldn't determine the exit
+			    // status:
+			    Ok(Err(e)) => {
+				panic!("Error while determining whether child exited: {:?}", e);
+			    },
+			    // We couldn't acquire the lock (presumably because
+			    // a stop was already requested, and thus the
+			    // process has shut down):
+			    Err(_) => false,
+			};
+
+			// Unlock the mutex:
+			std::mem::drop(child);
+
+			if exited {
+			    // TODO: Once we implement chunking, do one last
+			    // read on both FDs and flush to the coordinator.
+
+			    // This must be executed in an asynchronous task,
+			    // inpendent of this current one, or otherwise we'd
+			    // deadlock. This is because stop_job will await
+			    // this task's join.
+			    let stop_this = this.clone();
+			    tokio::spawn(async move {
+				NspawnRunner::stop_job(&stop_this, job_id).await;
+			    });
+
+			    // Don't break out of the loop -- we still expect
+			    // the official Shutdown signal, as usual.
+			}
+		    }
+
+                    ReadConsoleRes::Error(e) => {
                         panic!("Error reading process output: {:?}", e);
                     }
                 }
@@ -500,6 +610,7 @@ impl connector::Runner for NspawnRunner {
             console_streamer_handle: console_streamer,
             console_streamer_cmd_chan: streamer_chan_tx,
             root_fs_mountpoint: Some(root_fs_mountpoint),
+	    control_socket,
             zfs_root_fs,
         });
     }
@@ -568,43 +679,53 @@ impl connector::Runner for NspawnRunner {
         // shutdown by sending a SIGTERM to the systemd-nspawn process, which
         // should send a SIGRTMIN+3 to the container's PID1, which will initiate
         // an orderly shutdown:
-        if let Some(pid) = job.nspawn_proc.id() {
-            println!("Sending SIGTERM to nspawn process...");
-            let _ = nix::sys::signal::kill(
+	let mut child = job.nspawn_proc.lock().await;
+        if let Some(pid) = child.id() {
+	    debug!("Sending SIGTERM to nspawn process...");
+	    let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid.try_into().unwrap()),
                 nix::sys::signal::Signal::SIGTERM,
-            );
+	    );
         }
 
         // Now, wait for the container to shut down, or until the shutdown
         // timeout expires:
+	debug!("Waiting on process exit or shutdown timeout ({} secs)", job.environment_config.shutdown_timeout);
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(job.environment_config.shutdown_timeout)) => {},
-            _ = job.nspawn_proc.wait() => {}
+            _ = child.wait() => {}
         };
 
         // Attempt to get the process' exit status or, if that doesn't succeed,
         // kill it, in a loop:
+	debug!("Process exited OR timeout fired. Check exit code or kill child in a loop.");
         let mut exit_status = None;
         while exit_status.is_none() {
-            match job.nspawn_proc.try_wait() {
+            match child.try_wait() {
                 Ok(Some(es)) => {
+		    debug!("Child exited.");
                     exit_status = Some(es);
                 }
-                Ok(None) => job.nspawn_proc.kill().await.unwrap(),
+                Ok(None) => child.kill().await.unwrap(),
                 Err(e) => {
                     panic!("Error while killing nspawn process: {:?}", e);
                 }
             }
         }
+	debug!("Child is dead and exited with status: {:?}, code: {:?}", exit_status, exit_status.map(|es| es.code()));
 
-        // The process is dead. Instruct the log streamer to shutdown and wait
-        // for the last console logs to be posted to the coordinator.
+	// The process is dead. Destroy the control socket:
+	job.control_socket.shutdown().await.unwrap();
+
+        // Instruct the log streamer to shutdown and wait for the last console
+        // logs to be posted to the coordinator.
+	debug!("Requesting console streamer to shut down.");
         job.console_streamer_cmd_chan
             .send(ConsoleStreamerCommand::Shutdown)
             .await
-            .unwrap();
+	    .expect("Console streamer task has quit before receiving shutdown signal!");
         job.console_streamer_handle.await.unwrap();
+	debug!("Console streamer has shut down.");
 
         // Unmount the container's root file system:
         if let Some(mountpoint) = job.root_fs_mountpoint {
@@ -682,124 +803,46 @@ impl connector::Runner for NspawnRunner {
 
 #[tokio::main]
 async fn main() {
+    console_subscriber::init();
+
+    TermLogger::init(LevelFilter::Debug, SimpleLogConfig::default(), TerminalMode::Mixed, ColorChoice::Auto).unwrap();
+    info!("Starting siplane nspawn runner.");
+
+    use connector::RunnerConnector;
+
     let args = NspawnRunnerArgs::parse();
 
     let config_str = std::fs::read_to_string(args.config_file).unwrap();
     let config: NspawnRunnerConfig = toml::from_str(&config_str).unwrap();
 
-    let mut connector_opt = None;
-    let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
-        let connector = Arc::new(connector::RunnerConnector::new(
-            config.coordinator_base_url.clone(),
-            config.board_id,
-            weak_runner.clone(),
-            Duration::from_secs(config.keepalive_timeout),
-            Duration::from_secs(config.reconnect_wait),
-        ));
-        connector_opt = Some(connector.clone());
-        NspawnRunner::new(connector, config)
-    });
-    let connector = connector_opt.take().unwrap();
-
-    connector.run().await;
+    if let Some(test_env_uuid) = args.test_env {
+	let mut connector_opt = None;
+	let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
+            let connector = Arc::new(test_connector::TestRunnerConnector::new(
+		config.board_id,
+		test_env_uuid,
+		weak_runner.clone(),
+	    ));
+            connector_opt = Some(connector.clone());
+            NspawnRunner::new(connector, config)
+	});
+	let connector = connector_opt.take().unwrap();
+	connector.run().await;
+    } else {
+	let mut connector_opt = None;
+	let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
+	    let connector = Arc::new(connector::SSERunnerConnector::new(
+		config.coordinator_base_url.clone(),
+		config.board_id,
+		weak_runner.clone(),
+		Duration::from_secs(config.keepalive_timeout),
+		Duration::from_secs(config.reconnect_wait),
+	    ));
+            connector_opt = Some(connector.clone());
+            NspawnRunner::new(connector, config)
+	});
+	let connector = connector_opt.take().unwrap();
+	connector.run().await;
+    }
 }
 
-// #[derive(Deserialize)]
-// #[serde(rename_all = "snake_case")]
-// #[serde(tag = "type")]
-// pub enum SSEMessage {
-//     UpdateState,
-//     StartJob {
-//         id: Uuid,
-//         environment_id: String,
-//         ssh_keys: Vec<String>,
-//     }
-// }
-
-// #[derive(Serialize)]
-// #[serde(tag = "state")]
-// #[serde(rename_all = "snake_case")]
-// enum JobState {
-//     Starting,
-//     Running,
-//     Stopping,
-// }
-
-// struct NspawnRunner<'a> {
-//     config: &'a Config,
-//     nspawn_process: Option<tokio::process::Child>,
-//     current_job: Uuid,
-//     log: Vec<String>,
-//     client: reqwest::Client,
-// }
-
-// impl<'a> NspawnRunner<'a> {
-//     pub fn new(config: &'a Config) -> Self {
-//         NspawnRunner {
-//             config,
-//             nspawn_process: None,
-//             current_job: Uuid::nil(),
-//             log: Vec::new(),
-//             client: reqwest::Client::new(),
-//         }
-//     }
-
-//     pub async fn start_job(&mut self, environment_id: &str, job_id: Uuid, ssh_keys: Vec<String>) {
-//         println!("Starting job {:?}", job_id);
-//         self.client.put(
-//             &format!("{}/api/runner/v0/jobs/{}/state", self.config.coordinator_base_url, job_id.to_string())
-//         )
-//         .json(&JobState::Starting)
-//         .send()
-//         .await
-//         .unwrap();
-
-//         if self.nspawn_process.is_some() {
-//             panic!("Tried to start job with existing job already running!");
-//         }
-
-//         let environment_config = self.config.environments.get(environment_id).unwrap();
-
-//         let proc = tokio::process::Command::new("systemd-run")
-//             .args([
-//                 "--scope",
-//                 "--property=DevicePolicy=closed",
-//                 // "--property=DeviceAllow='/dev/ttyUSB1 rw'",
-//                 "--",
-//                 "systemd-nspawn",
-//                 "-D",
-//                 "/containerfs",
-//                 "--keep-unit",
-//                 "--private-users=pick",
-//                 "--private-network",
-//                 "--network-veth",
-//                 "--bind-ro=/nix/store",
-//                 "--bind-ro=/nix/var/nix/db",
-//                 "--bind-ro=/nix/var/nix/daemon-socket",
-//                 // "--bind=/dev/ttyUSB1",
-//                 &environment_config.init,
-//             ])
-//             .spawn()
-//             .expect("Failed to spawn environment");
-
-//         self.nspawn_process = Some(proc);
-//     }
-// }
-
-// async fn stream_loop<'a>(config: &Config, runner: &mut NspawnRunner<'a>) {
-
-// }
-
-// #[tokio::main]
-// async fn main() {
-//     let config_str = std::fs::read_to_string("runner_config.toml").unwrap();
-//     let config: Config = toml::from_str(&config_str).unwrap();
-
-//     let mut nspawn_runner = NspawnRunner::new(&config);
-
-//     loop {
-//         stream_loop(&config, &mut nspawn_runner).await;
-//         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-//     }
-// }
