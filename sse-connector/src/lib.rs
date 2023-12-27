@@ -5,102 +5,8 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-pub mod sse_api {
-    use uuid::Uuid;
-
-    #[derive(Deserialize, Debug, Clone)]
-    #[serde(rename_all = "snake_case")]
-    #[serde(tag = "type")]
-    pub enum SSEMessage {
-        UpdateState,
-        StartJob {
-            job_id: Uuid,
-            environment_id: Uuid,
-            ssh_keys: Vec<String>,
-        },
-        StopJob {
-            job_id: Uuid,
-        },
-    }
-}
-
-pub mod rest_api {
-    #[derive(Serialize, Debug, Clone)]
-    #[serde(rename_all = "snake_case")]
-    pub enum JobStartingStage {
-        /// Acquiring resources, such as the root file system, to launch the
-        /// board environment.
-        Allocating,
-
-        /// Provisioning the environment, such as making any changes to the base
-        /// system according to the user-provided customizations.
-        Provisioning,
-
-        /// The container is booting. The next transition should
-        /// either be into the `Ready` or `Failed` states.
-        Booting,
-    }
-
-    #[derive(Serialize, Debug, Clone)]
-    #[serde(rename_all = "snake_case")]
-    pub enum JobSessionConnectionInfo {
-        DirectSSH {
-            hostname: String,
-            port: u16,
-            host_key_fingerprints: Vec<String>,
-        },
-    }
-
-    #[derive(Serialize, Debug, Clone)]
-    #[serde(tag = "state")]
-    #[serde(rename_all = "snake_case")]
-    pub enum JobState {
-        Starting {
-            stage: JobStartingStage,
-            status_message: Option<String>,
-        },
-        Ready {
-            connection_info: Vec<JobSessionConnectionInfo>,
-            status_message: Option<String>,
-        },
-        Stopping {
-            status_message: Option<String>,
-        },
-        Finished {
-            status_message: Option<String>,
-        },
-        Failed {
-            status_message: Option<String>,
-        },
-    }
-
-    #[derive(Serialize, Debug, Copy, Clone)]
-    #[serde(rename_all = "snake_case")]
-    pub enum StdioFd {
-        Stdout,
-        Stderr,
-    }
-}
-
-#[async_trait]
-pub trait Runner: Send + Sync + 'static {
-    async fn start_job(this: &Arc<Self>, job_id: Uuid, environment_id: Uuid, ssh_keys: Vec<String>);
-    async fn stop_job(this: &Arc<Self>, job_id: Uuid);
-}
-
-#[async_trait]
-pub trait RunnerConnector: Send + Sync + 'static {
-    async fn run(&self);
-    async fn post_job_state(&self, job_id: Uuid, job_state: rest_api::JobState);
-    async fn send_job_console_log(
-        &self,
-        job_id: Uuid,
-        offset: usize,
-        next: usize,
-        stdio_map: &[(rest_api::StdioFd, usize)],
-        console_bytes: Vec<u8>,
-    );
-}
+use siplane_rs::api::coord_runner::{rest as rest_api, sse as sse_api};
+use siplane_rs::connector::{Runner, RunnerConnector};
 
 pub struct SSERunnerConnector<R: Runner> {
     coord_url: String,
@@ -197,36 +103,40 @@ impl<R: Runner> RunnerConnector for SSERunnerConnector<R> {
             let mut stream = Box::pin(client.stream());
 
             loop {
+                #[rustfmt::skip]
                 tokio::select! {
                     sse_stream_element = stream.try_next() => {
-                    match sse_stream_element {
-                        Ok(Some(SSE::Event(ev))) => {
-                        self.handle_sse_event(ev, &runner).await;
-                        last_message = Instant::now();
-                        }
+                        match sse_stream_element {
+                            Ok(Some(SSE::Event(ev))) => {
+                                self.handle_sse_event(ev, &runner).await;
+                                last_message = Instant::now();
+                            }
 
-                        Ok(Some(SSE::Comment(_))) => {
-                        // Do nothing. We use comments for keep-alive messages only.
-                        last_message = Instant::now();
-                        }
+                            Ok(Some(SSE::Comment(_))) => {
+                                // Do nothing. We use comments for keep-alive messages only.
+                                last_message = Instant::now();
+                            }
 
-                        Ok(None) => {
-                        // Ignore empty stream elements.
-                        },
+                            Ok(None) => {
+                                // Ignore empty stream elements.
+                            },
 
-                        Err(e) => {
-                        println!("Error while processing SSE stream, terminating connection: {:?}", e);
-                        break
+                            Err(e) => {
+                                println!("Error while processing SSE stream, terminating connection: {:?}", e);
+                                break
+                            }
                         }
-                    }
                     }
 
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                    // Check whether the keepalive timeout has expired:
-                    if Instant::now().duration_since(last_message) > self.keepalive_timeout {
-                        println!("No coordinator message for {} sec, terminating connection.", self.keepalive_timeout.as_secs());
-                        break
-                    }
+                        // Check whether the keepalive timeout has expired:
+                        if Instant::now().duration_since(last_message) > self.keepalive_timeout {
+                            println!(
+                                "No coordinator message for {} sec, terminating connection.",
+                                self.keepalive_timeout.as_secs()
+                            );
+                            break
+                        }
                     }
                 }
             }

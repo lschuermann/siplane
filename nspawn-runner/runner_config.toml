@@ -5,7 +5,7 @@ keepalive_timeout = 60
 reconnect_wait = 10
 
 [environments.c4e08e00-cfb0-46d1-83eb-ee62e128cc70]
-init = "/nix/store/y3h62baa8lpcxjh48pbf4y870944jxqf-nixos-system-si-pton-arty35-0-23.05.git.1a3c95e3b23b/init"
+init = "/nix/store/1ffabwpid5w2f5rj9r56bgzbavl1qyww-nixos-system-si-pton-arty35-0-23.11pre-git/init"
 shutdown_timeout = 30
 control_socket_path = "/siplane-ctrl"
 
@@ -28,3 +28,14 @@ readonly = true
 parent = "rpool/siplane-nspawn"
 mount_base = "/var/lib/siplane/root"
 quota = "10G"
+
+[[environments.c4e08e00-cfb0-46d1-83eb-ee62e128cc70.device]]
+device_node = "/dev/ttyACM1"
+read = true
+write = true
+create = false
+
+[[environments.c4e08e00-cfb0-46d1-83eb-ee62e128cc70.mount]]
+src = "/dev/ttyACM1"
+dst = "/dev/ttyACM1"
+readonly = false

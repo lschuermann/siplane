@@ -1,26 +1,28 @@
 use std::collections::HashMap;
-
-#[macro_use]
-extern crate serde;
-
-use log::{debug, info, warn};
-use simplelog::{TermLogger, Config as SimpleLogConfig, TerminalMode, ColorChoice, LevelFilter};
-use anyhow::{Context,Result};
-use async_trait::async_trait;
-use clap::Parser;
-use serde::Deserialize;
-use tokio::io::BufReader;
-use tokio::net::UnixDatagram;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use clap::Parser;
+use log::{debug, info};
+use serde::Deserialize;
+use simplelog::{ColorChoice, Config as SimpleLogConfig, LevelFilter, TermLogger, TerminalMode};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-mod connector;
-mod test_connector;
-mod control_socket;
+use siplane_rs::api::coord_runner::rest as rest_api;
+use siplane_rs::connector;
+use siplane_rs::control_socket;
+use siplane_rs::dummy_connector::DummyRunnerConnector;
+use siplane_sse_connector::SSERunnerConnector;
+use siplane_unix_seqpacket_control_socket::UnixSeqpacketControlSocket;
+
+// mod connector;
+// mod control_socket;
+// mod test_connector;
 
 #[derive(Parser, Debug, Clone)]
 struct NspawnRunnerArgs {
@@ -44,9 +46,20 @@ pub struct NspawnRunnerEnvironmentZfsRootConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentMountConfig {
+    // TODO: this should be a PathBuf
     src: String,
+    // TODO: this should be a PathBuf
     dst: String,
     readonly: bool,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct NspawnRunnerEnvironmentDeviceConfig {
+    // TODO: this should be a PathBuf
+    device_node: String,
+    read: bool,
+    write: bool,
+    create: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -54,6 +67,7 @@ pub struct NspawnRunnerEnvironmentConfig {
     init: Option<String>,
     shutdown_timeout: u64,
     mount: Vec<NspawnRunnerEnvironmentMountConfig>,
+    device: Vec<NspawnRunnerEnvironmentDeviceConfig>,
     zfsroot: Option<NspawnRunnerEnvironmentZfsRootConfig>,
     control_socket_path: PathBuf,
 }
@@ -72,11 +86,11 @@ pub struct NspawnRunnerJob {
     job_id: Uuid,
     _environment_id: Uuid,
     environment_config: NspawnRunnerEnvironmentConfig,
-    _ssh_keys: Vec<String>,
+    ssh_keys: Vec<String>,
     nspawn_proc: Arc<Mutex<tokio::process::Child>>,
     console_streamer_handle: tokio::task::JoinHandle<()>,
     console_streamer_cmd_chan: tokio::sync::mpsc::Sender<ConsoleStreamerCommand>,
-    control_socket: control_socket::ControlSocket<NspawnRunner>,
+    control_socket: UnixSeqpacketControlSocket<NspawnRunner>,
 
     // Pointers to created resources, to delete when shutting down (if not
     // indicated otherwise):
@@ -91,10 +105,7 @@ pub struct NspawnRunner {
 }
 
 impl NspawnRunner {
-    pub fn new(
-        connector: Arc<dyn connector::RunnerConnector>,
-        config: NspawnRunnerConfig,
-    ) -> Self {
+    pub fn new(connector: Arc<dyn connector::RunnerConnector>, config: NspawnRunnerConfig) -> Self {
         NspawnRunner {
             connector,
             config,
@@ -209,7 +220,7 @@ impl NspawnRunner {
                 if !status.success() {
                     Err(format!(
                         "Destroying ZFS root filesystem failed with exit-status \
-				     {:?}. Stdout: {}, Stderr: {}",
+                                     {:?}. Stdout: {}, Stderr: {}",
                         status.code(),
                         String::from_utf8_lossy(&stdout),
                         String::from_utf8_lossy(&stderr)
@@ -256,7 +267,7 @@ impl connector::Runner for NspawnRunner {
             this.connector
                 .post_job_state(
                     job_id,
-                    connector::rest_api::JobState::Failed {
+                    rest_api::JobState::Failed {
                         status_message: Some(format!(
                             "Cannot start job {:?} on board {:?}, still executing job {:?}",
                             job_id, this.config.board_id, running_job_id
@@ -275,7 +286,7 @@ impl connector::Runner for NspawnRunner {
             this.connector
                 .post_job_state(
                     job_id,
-                    connector::rest_api::JobState::Failed {
+                    rest_api::JobState::Failed {
                         status_message: Some(format!(
                             "Cannot start job {:?} on board {:?}, unknown environment {:?}",
                             job_id, this.config.board_id, environment_id
@@ -291,8 +302,8 @@ impl connector::Runner for NspawnRunner {
         this.connector
             .post_job_state(
                 job_id,
-                connector::rest_api::JobState::Starting {
-                    stage: connector::rest_api::JobStartingStage::Allocating,
+                rest_api::JobState::Starting {
+                    stage: rest_api::JobStartingStage::Allocating,
                     status_message: None,
                 },
             )
@@ -317,7 +328,7 @@ impl connector::Runner for NspawnRunner {
                 this.connector
                     .post_job_state(
                         job_id,
-                        connector::rest_api::JobState::Failed {
+                        rest_api::JobState::Failed {
                             status_message: Some(msg),
                         },
                     )
@@ -326,29 +337,39 @@ impl connector::Runner for NspawnRunner {
             }
         };
 
-	// Create the control socket in the container's root path.
+        // Create the control socket in the container's root path.
 
-	// Get the absolute path to the socket (convert `control_socket_path`
-	// into relative, then join with the `root_fs_mountpoint`):
-	let control_socket_path_rel = environment_cfg.control_socket_path
-	    .strip_prefix("/")
-	    .unwrap_or(&environment_cfg.control_socket_path);
-	let control_socket_path_abs = root_fs_mountpoint.join(control_socket_path_rel);
-	// Make sure that the final path is within the container:
-	assert!(control_socket_path_abs.starts_with(&root_fs_mountpoint));
+        // Get the absolute path to the socket (convert `control_socket_path`
+        // into relative, then join with the `root_fs_mountpoint`):
+        let control_socket_path_rel = environment_cfg
+            .control_socket_path
+            .strip_prefix("/")
+            .unwrap_or(&environment_cfg.control_socket_path);
+        let control_socket_path_abs = root_fs_mountpoint.join(control_socket_path_rel);
+        // Make sure that the final path is within the container:
+        assert!(control_socket_path_abs.starts_with(&root_fs_mountpoint));
 
-	// Start the control socket handler and create a new UNIX SeqPacket socket:
-	let control_socket = control_socket::ControlSocket::new_unix_seqpacket(
-	    &control_socket_path_abs, this.clone()
-	).await
-	    .with_context(|| format!("Creating control socket under \"{:?}\"", control_socket_path_abs)).unwrap();
+        // Start the control socket handler and create a new UNIX SeqPacket socket:
+        let control_socket = UnixSeqpacketControlSocket::new_unix_seqpacket(
+            job_id,
+            &control_socket_path_abs,
+            this.clone(),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Creating control socket under \"{:?}\"",
+                control_socket_path_abs
+            )
+        })
+        .unwrap();
 
         // All resources have been allocated, mark the container as booting:
         this.connector
             .post_job_state(
                 job_id,
-                connector::rest_api::JobState::Starting {
-                    stage: connector::rest_api::JobStartingStage::Booting,
+                rest_api::JobState::Starting {
+                    stage: rest_api::JobStartingStage::Booting,
                     status_message: None,
                 },
             )
@@ -357,7 +378,24 @@ impl connector::Runner for NspawnRunner {
         let mut run_args = vec![
             "--scope".to_string(),
             "--property=DevicePolicy=closed".to_string(),
-            // "--property=DeviceAllow='/dev/ttyUSB1 rw'", // To allow dev access
+        ];
+
+        for device_cfg in environment_cfg.device.iter() {
+            if !device_cfg.read && !device_cfg.write && !device_cfg.create {
+                // Don't add devices with no permissions:
+                continue;
+            }
+
+            run_args.push(format!(
+                "--property=DeviceAllow={} {}{}{}",
+                &device_cfg.device_node,
+                if device_cfg.read { "r" } else { "" },
+                if device_cfg.write { "w" } else { "" },
+                if device_cfg.create { "m" } else { "" },
+            ));
+        }
+
+        run_args.extend([
             "--".to_string(),
             "systemd-nspawn".to_string(),
             "-D".to_string(),
@@ -367,10 +405,7 @@ impl connector::Runner for NspawnRunner {
             "--private-users=pick".to_string(),
             "--private-network".to_string(),
             format!("--network-veth-extra={}:host0", this.config.host_veth_name),
-            "--bind-ro=/nix/store".to_string(),
-            "--bind-ro=/nix/var/nix/db".to_string(),
-            "--bind-ro=/nix/var/nix/daemon-socket".to_string(),
-        ];
+        ]);
 
         // Add all additional mountpoints:
         for mount_cfg in environment_cfg.mount.iter() {
@@ -407,7 +442,7 @@ impl connector::Runner for NspawnRunner {
                 this.connector
                     .post_job_state(
                         job_id,
-                        connector::rest_api::JobState::Failed {
+                        rest_api::JobState::Failed {
                             status_message: Some(format!("Failed to spawn container: {:?}", e,)),
                         },
                     )
@@ -418,20 +453,20 @@ impl connector::Runner for NspawnRunner {
 
         // Acquire the stdout and stderr pipes, and spawn a new log-streamer
         // task that collects all log output and streams it to the coordinator:
-        let mut stdout = child
+        let stdout = child
             .stdout
             .take()
             .expect("Failed to acquire stdout from child process");
-        let mut stderr = child
+        let stderr = child
             .stderr
             .take()
             .expect("Failed to acquire stderr from child process");
 
-	let child = Arc::new(Mutex::new(child));
+        let child = Arc::new(Mutex::new(child));
 
         let this_streamer = this.clone();
         let (streamer_chan_tx, mut streamer_chan_rx) = tokio::sync::mpsc::channel(1);
-	let streamer_child = child.clone();
+        let streamer_child = child.clone();
         let console_streamer = tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let this = this_streamer;
@@ -447,65 +482,65 @@ impl connector::Runner for NspawnRunner {
             let _console_queue_sent = 0;
 
             let mut stdout_buf = [0; 64 * 1024];
-	    let mut stdout_closed = false;
+            let mut stdout_closed = false;
             let mut stderr_buf = [0; 64 * 1024];
-	    let mut stderr_closed = false;
+            let mut stderr_closed = false;
 
-	    enum ReadConsoleRes {
-		ZeroBytes,
-		Data,
-		Shutdown,
-		Error(std::io::Error),
-	    }
+            enum ReadConsoleRes {
+                ZeroBytes,
+                Data,
+                Shutdown,
+                Error(std::io::Error),
+            }
 
             loop {
                 // TODO: force buf flush on timeout?
+                #[rustfmt::skip]
                 let res = tokio::select! {
                     streamer_cmd_opt = streamer_chan_rx.recv() => {
-			match streamer_cmd_opt {
-			    Some(ConsoleStreamerCommand::Shutdown) => ReadConsoleRes::Shutdown,
-			    None => {
-				panic!("Streamer command channel TX dropped!");
-			    }
-			}
+                        match streamer_cmd_opt {
+                            Some(ConsoleStreamerCommand::Shutdown) => ReadConsoleRes::Shutdown,
+                            None => {
+                                panic!("Streamer command channel TX dropped!");
+                            }
+                        }
                     }
 
                     read_res = stdout_reader.read(&mut stdout_buf), if !stdout_closed => {
                         match read_res {
-			    Ok(0) => {
-				// Mark as closed, so we don't loop reading zero bytes:
-				stdout_closed = true;
-				ReadConsoleRes::ZeroBytes
-			    },
-			    Ok(read_len) => {
-				console_queue.push_back((
-				    connector::rest_api::StdioFd::Stdout,
-				    stdout_buf[..read_len].to_vec()
-				));
-				ReadConsoleRes::Data
-			    }
-			    Err(e) => ReadConsoleRes::Error(e),
-			}
-                    }
-
-                    read_res = stderr_reader.read(&mut stderr_buf), if !stderr_closed => {
-			match read_res {
-			    Ok(0) => {
-				// Mark as closed, so we don't loop reading zero bytes:
-				stderr_closed = true;
-				ReadConsoleRes::ZeroBytes
-			    },
+                            Ok(0) => {
+                                // Mark as closed, so we don't loop reading zero bytes:
+                                stdout_closed = true;
+                                ReadConsoleRes::ZeroBytes
+                            },
                             Ok(read_len) => {
-				console_queue.push_back((
-				    connector::rest_api::StdioFd::Stderr,
-				    stderr_buf[..read_len].to_vec()
-				));
-				ReadConsoleRes::Data
-			    },
-			    Err(e) => ReadConsoleRes::Error(e),
+                                console_queue.push_back((
+                                    rest_api::StdioFd::Stdout,
+                                    stdout_buf[..read_len].to_vec()
+                                ));
+                                ReadConsoleRes::Data
+                            }
+                            Err(e) => ReadConsoleRes::Error(e),
                         }
                     }
 
+                    read_res = stderr_reader.read(&mut stderr_buf), if !stderr_closed => {
+                        match read_res {
+                            Ok(0) => {
+                                // Mark as closed, so we don't loop reading zero bytes:
+                                stderr_closed = true;
+                                ReadConsoleRes::ZeroBytes
+                            },
+                            Ok(read_len) => {
+                                console_queue.push_back((
+                                    rest_api::StdioFd::Stderr,
+                                    stderr_buf[..read_len].to_vec()
+                                ));
+                                ReadConsoleRes::Data
+                            },
+                            Err(e) => ReadConsoleRes::Error(e),
+                        }
+                    }
                 };
 
                 match res {
@@ -529,60 +564,60 @@ impl connector::Runner for NspawnRunner {
                     ReadConsoleRes::Shutdown => {
                         // Asked to shut down. Once we implement chunking, do
                         // one last flush to the coordinator.
-			debug!("Shutting down console log streamer.");
+                        debug!("Shutting down console log streamer.");
                         break;
                     }
 
-		    ReadConsoleRes::ZeroBytes => {
-			info!("Handling ZeroBytes case, acquiring lock...");
-			// Reading zero bytes is an indication that the process
-			// might've exited. Check whether this is the case. If
-			// the process has died, perform one last read and
-			// invoke the shutdown code for this job. Prior to that
-			// we must release the child lock! This code path may
-			// also be invoked while the process is already shutting
-			// down (e.g. because of an invocation of
-			// `stop_job`). In this case, simply attempt another
-			// loop iteration and don't attempt to stop the job
-			// again (as this would result in a deadlock).
-			let mut child = streamer_child.try_lock();
+                    ReadConsoleRes::ZeroBytes => {
+                        info!("Handling ZeroBytes case, acquiring lock...");
+                        // Reading zero bytes is an indication that the process
+                        // might've exited. Check whether this is the case. If
+                        // the process has died, perform one last read and
+                        // invoke the shutdown code for this job. Prior to that
+                        // we must release the child lock! This code path may
+                        // also be invoked while the process is already shutting
+                        // down (e.g. because of an invocation of
+                        // `stop_job`). In this case, simply attempt another
+                        // loop iteration and don't attempt to stop the job
+                        // again (as this would result in a deadlock).
+                        let mut child = streamer_child.try_lock();
 
-			let exited = match child.as_mut().map(|c| c.try_wait()) {
-			    // We have the lock, and the child has exited:
-			    Ok(Ok(Some(_))) => true,
-			    // We have the lock, but the child has not exited:
-			    Ok(Ok(None)) => false,
-			    // We have the lock, but couldn't determine the exit
-			    // status:
-			    Ok(Err(e)) => {
-				panic!("Error while determining whether child exited: {:?}", e);
-			    },
-			    // We couldn't acquire the lock (presumably because
-			    // a stop was already requested, and thus the
-			    // process has shut down):
-			    Err(_) => false,
-			};
+                        let exited = match child.as_mut().map(|c| c.try_wait()) {
+                            // We have the lock, and the child has exited:
+                            Ok(Ok(Some(_))) => true,
+                            // We have the lock, but the child has not exited:
+                            Ok(Ok(None)) => false,
+                            // We have the lock, but couldn't determine the exit
+                            // status:
+                            Ok(Err(e)) => {
+                                panic!("Error while determining whether child exited: {:?}", e);
+                            }
+                            // We couldn't acquire the lock (presumably because
+                            // a stop was already requested, and thus the
+                            // process has shut down):
+                            Err(_) => false,
+                        };
 
-			// Unlock the mutex:
-			std::mem::drop(child);
+                        // Unlock the mutex:
+                        std::mem::drop(child);
 
-			if exited {
-			    // TODO: Once we implement chunking, do one last
-			    // read on both FDs and flush to the coordinator.
+                        if exited {
+                            // TODO: Once we implement chunking, do one last
+                            // read on both FDs and flush to the coordinator.
 
-			    // This must be executed in an asynchronous task,
-			    // inpendent of this current one, or otherwise we'd
-			    // deadlock. This is because stop_job will await
-			    // this task's join.
-			    let stop_this = this.clone();
-			    tokio::spawn(async move {
-				NspawnRunner::stop_job(&stop_this, job_id).await;
-			    });
+                            // This must be executed in an asynchronous task,
+                            // inpendent of this current one, or otherwise we'd
+                            // deadlock. This is because stop_job will await
+                            // this task's join.
+                            let stop_this = this.clone();
+                            tokio::spawn(async move {
+                                NspawnRunner::stop_job(&stop_this, job_id).await;
+                            });
 
-			    // Don't break out of the loop -- we still expect
-			    // the official Shutdown signal, as usual.
-			}
-		    }
+                            // Don't break out of the loop -- we still expect
+                            // the official Shutdown signal, as usual.
+                        }
+                    }
 
                     ReadConsoleRes::Error(e) => {
                         panic!("Error reading process output: {:?}", e);
@@ -594,7 +629,7 @@ impl connector::Runner for NspawnRunner {
         this.connector
             .post_job_state(
                 job_id,
-                connector::rest_api::JobState::Ready {
+                rest_api::JobState::Ready {
                     connection_info: vec![],
                     status_message: None,
                 },
@@ -605,12 +640,12 @@ impl connector::Runner for NspawnRunner {
             job_id,
             _environment_id: environment_id,
             environment_config: environment_cfg.clone(),
-            _ssh_keys: ssh_keys,
+            ssh_keys: ssh_keys,
             nspawn_proc: child,
             console_streamer_handle: console_streamer,
             console_streamer_cmd_chan: streamer_chan_tx,
             root_fs_mountpoint: Some(root_fs_mountpoint),
-	    control_socket,
+            control_socket,
             zfs_root_fs,
         });
     }
@@ -633,7 +668,7 @@ impl connector::Runner for NspawnRunner {
                     this.connector
                         .post_job_state(
                             job_id,
-                            connector::rest_api::JobState::Failed {
+                            rest_api::JobState::Failed {
                                 status_message: Some(format!(
                                     "Cannot stop job {:?} on board {:?}, not running!",
                                     job_id, this.config.board_id,
@@ -649,7 +684,7 @@ impl connector::Runner for NspawnRunner {
                 this.connector
                     .post_job_state(
                         job_id,
-                        connector::rest_api::JobState::Failed {
+                        rest_api::JobState::Failed {
                             status_message: Some(format!(
                                 "Cannot stop job {:?} on board {:?}, not running!",
                                 job_id, this.config.board_id,
@@ -662,14 +697,14 @@ impl connector::Runner for NspawnRunner {
         };
 
         // Take the job object, such that we own it:
-        let mut job = current_job_lg.take().unwrap();
+        let job = current_job_lg.take().unwrap();
 
         // The requested job is currently running, procede to stop it.
         // Transition into the shutdown state:
         this.connector
             .post_job_state(
                 job_id,
-                connector::rest_api::JobState::Stopping {
+                rest_api::JobState::Stopping {
                     status_message: None,
                 },
             )
@@ -679,18 +714,21 @@ impl connector::Runner for NspawnRunner {
         // shutdown by sending a SIGTERM to the systemd-nspawn process, which
         // should send a SIGRTMIN+3 to the container's PID1, which will initiate
         // an orderly shutdown:
-	let mut child = job.nspawn_proc.lock().await;
+        let mut child = job.nspawn_proc.lock().await;
         if let Some(pid) = child.id() {
-	    debug!("Sending SIGTERM to nspawn process...");
-	    let _ = nix::sys::signal::kill(
+            debug!("Sending SIGTERM to nspawn process...");
+            let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid.try_into().unwrap()),
                 nix::sys::signal::Signal::SIGTERM,
-	    );
+            );
         }
 
         // Now, wait for the container to shut down, or until the shutdown
         // timeout expires:
-	debug!("Waiting on process exit or shutdown timeout ({} secs)", job.environment_config.shutdown_timeout);
+        debug!(
+            "Waiting on process exit or shutdown timeout ({} secs)",
+            job.environment_config.shutdown_timeout
+        );
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(job.environment_config.shutdown_timeout)) => {},
             _ = child.wait() => {}
@@ -698,12 +736,12 @@ impl connector::Runner for NspawnRunner {
 
         // Attempt to get the process' exit status or, if that doesn't succeed,
         // kill it, in a loop:
-	debug!("Process exited OR timeout fired. Check exit code or kill child in a loop.");
+        debug!("Process exited OR timeout fired. Check exit code or kill child in a loop.");
         let mut exit_status = None;
         while exit_status.is_none() {
             match child.try_wait() {
                 Ok(Some(es)) => {
-		    debug!("Child exited.");
+                    debug!("Child exited.");
                     exit_status = Some(es);
                 }
                 Ok(None) => child.kill().await.unwrap(),
@@ -712,20 +750,24 @@ impl connector::Runner for NspawnRunner {
                 }
             }
         }
-	debug!("Child is dead and exited with status: {:?}, code: {:?}", exit_status, exit_status.map(|es| es.code()));
+        debug!(
+            "Child is dead and exited with status: {:?}, code: {:?}",
+            exit_status,
+            exit_status.map(|es| es.code())
+        );
 
-	// The process is dead. Destroy the control socket:
-	job.control_socket.shutdown().await.unwrap();
+        // The process is dead. Destroy the control socket:
+        job.control_socket.shutdown().await.unwrap();
 
         // Instruct the log streamer to shutdown and wait for the last console
         // logs to be posted to the coordinator.
-	debug!("Requesting console streamer to shut down.");
+        debug!("Requesting console streamer to shut down.");
         job.console_streamer_cmd_chan
             .send(ConsoleStreamerCommand::Shutdown)
             .await
-	    .expect("Console streamer task has quit before receiving shutdown signal!");
+            .expect("Console streamer task has quit before receiving shutdown signal!");
         job.console_streamer_handle.await.unwrap();
-	debug!("Console streamer has shut down.");
+        debug!("Console streamer has shut down.");
 
         // Unmount the container's root file system:
         if let Some(mountpoint) = job.root_fs_mountpoint {
@@ -739,10 +781,10 @@ impl connector::Runner for NspawnRunner {
                         this.connector
                             .post_job_state(
                                 job_id,
-                                connector::rest_api::JobState::Failed {
+                                rest_api::JobState::Failed {
                                     status_message: Some(format!(
                                         "Unmounting root filesystem failed with exit-status \
-					 {:?}. Stdout: {}, Stderr: {}",
+                                         {:?}. Stdout: {}, Stderr: {}",
                                         status.code(),
                                         String::from_utf8_lossy(&stdout),
                                         String::from_utf8_lossy(&stderr)
@@ -757,7 +799,7 @@ impl connector::Runner for NspawnRunner {
                     this.connector
                         .post_job_state(
                             job_id,
-                            connector::rest_api::JobState::Failed {
+                            rest_api::JobState::Failed {
                                 status_message: Some(format!(
                                     "Unmounting root filesystem failed with error: {:?}",
                                     e
@@ -776,7 +818,7 @@ impl connector::Runner for NspawnRunner {
                 this.connector
                     .post_job_state(
                         job_id,
-                        connector::rest_api::JobState::Failed {
+                        rest_api::JobState::Failed {
                             status_message: Some(msg),
                         },
                     )
@@ -793,7 +835,7 @@ impl connector::Runner for NspawnRunner {
         this.connector
             .post_job_state(
                 job_id,
-                connector::rest_api::JobState::Finished {
+                rest_api::JobState::Finished {
                     status_message: None,
                 },
             )
@@ -801,14 +843,33 @@ impl connector::Runner for NspawnRunner {
     }
 }
 
+#[async_trait]
+impl control_socket::Runner for NspawnRunner {
+    async fn ssh_keys(&self, tgt_job_id: Uuid) -> Option<Vec<String>> {
+        match *self.current_job.lock().await {
+            None => None,
+            Some(NspawnRunnerJob {
+                ref job_id,
+                ref ssh_keys,
+                ..
+            }) if *job_id == tgt_job_id => Some(ssh_keys.clone()),
+            Some(_) => None,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    console_subscriber::init();
+    use siplane_rs::connector::RunnerConnector;
 
-    TermLogger::init(LevelFilter::Debug, SimpleLogConfig::default(), TerminalMode::Mixed, ColorChoice::Auto).unwrap();
+    TermLogger::init(
+        LevelFilter::Debug,
+        SimpleLogConfig::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
     info!("Starting siplane nspawn runner.");
-
-    use connector::RunnerConnector;
 
     let args = NspawnRunnerArgs::parse();
 
@@ -816,33 +877,32 @@ async fn main() {
     let config: NspawnRunnerConfig = toml::from_str(&config_str).unwrap();
 
     if let Some(test_env_uuid) = args.test_env {
-	let mut connector_opt = None;
-	let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
-            let connector = Arc::new(test_connector::TestRunnerConnector::new(
-		config.board_id,
-		test_env_uuid,
-		weak_runner.clone(),
-	    ));
+        let mut connector_opt = None;
+        let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
+            let connector = Arc::new(DummyRunnerConnector::new(
+                config.board_id,
+                test_env_uuid,
+                weak_runner.clone(),
+            ));
             connector_opt = Some(connector.clone());
             NspawnRunner::new(connector, config)
-	});
-	let connector = connector_opt.take().unwrap();
-	connector.run().await;
+        });
+        let connector = connector_opt.take().unwrap();
+        connector.run().await;
     } else {
-	let mut connector_opt = None;
-	let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
-	    let connector = Arc::new(connector::SSERunnerConnector::new(
-		config.coordinator_base_url.clone(),
-		config.board_id,
-		weak_runner.clone(),
-		Duration::from_secs(config.keepalive_timeout),
-		Duration::from_secs(config.reconnect_wait),
-	    ));
+        let mut connector_opt = None;
+        let _nspawn_runner = Arc::new_cyclic(|weak_runner| {
+            let connector = Arc::new(SSERunnerConnector::new(
+                config.coordinator_base_url.clone(),
+                config.board_id,
+                weak_runner.clone(),
+                Duration::from_secs(config.keepalive_timeout),
+                Duration::from_secs(config.reconnect_wait),
+            ));
             connector_opt = Some(connector.clone());
             NspawnRunner::new(connector, config)
-	});
-	let connector = connector_opt.take().unwrap();
-	connector.run().await;
+        });
+        let connector = connector_opt.take().unwrap();
+        connector.run().await;
     }
 }
-

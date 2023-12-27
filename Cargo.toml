@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "siplane-rs",
+    "nspawn-runner",
+    "puppet",
+    "sse-connector", "unix-seqpacket-control-socket",
+]
