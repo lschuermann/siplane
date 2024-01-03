@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum PuppetReq {
     Ping,
     SSHKeys,
+    NetworkConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,15 +43,44 @@ pub enum RunnerEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub struct Ipv4NetworkConfig {
+    pub address: std::net::Ipv4Addr,
+    pub prefix_length: u8,
+    pub gateway: Option<std::net::Ipv4Addr>,
+    pub nameservers: Vec<std::net::Ipv4Addr>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub struct Ipv6NetworkConfig {
+    pub address: std::net::Ipv6Addr,
+    pub prefix_length: u8,
+    pub gateway: Option<std::net::Ipv6Addr>,
+    pub nameservers: Vec<std::net::Ipv6Addr>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub struct NetworkConfig {
+    pub hostname: String,
+    pub interface: Option<String>,
+    pub ipv4: Option<Ipv4NetworkConfig>,
+    pub ipv6: Option<Ipv6NetworkConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[serde(tag = "type")]
 #[non_exhaustive]
 pub enum RunnerResp {
     // Request reponses:
     PingResp,
     SSHKeysResp { ssh_keys: Vec<String> },
+    NetworkConfig(NetworkConfig),
 
     // Error responses:
     UnsupportedRequest,
+    JobNotFound,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

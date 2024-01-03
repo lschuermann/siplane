@@ -79,25 +79,23 @@ pub struct NspawnRunnerEnvironmentDeviceConfig {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-#[allow(unused)] // TODO: remove
-pub struct NspawnRunnerEnvironmentIPv4NetworkConfig {
-    ip: std::net::Ipv4Addr,
+pub struct NspawnRunnerEnvironmentIpv4NetworkConfig {
+    address: std::net::Ipv4Addr,
     prefix_length: u8,
     #[serde(default)]
     gateway: Option<std::net::Ipv4Addr>,
     #[serde(default)]
-    nameserver: Option<std::net::Ipv4Addr>,
+    nameservers: Vec<std::net::Ipv4Addr>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-#[allow(unused)] // TODO: remove
-pub struct NspawnRunnerEnvironmentIPv6NetworkConfig {
-    ip: std::net::Ipv6Addr,
+pub struct NspawnRunnerEnvironmentIpv6NetworkConfig {
+    address: std::net::Ipv6Addr,
     prefix_length: u8,
     #[serde(default)]
     gateway: Option<std::net::Ipv6Addr>,
     #[serde(default)]
-    nameserver: Option<std::net::Ipv6Addr>,
+    nameservers: Vec<std::net::Ipv6Addr>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -131,9 +129,9 @@ pub struct NspawnRunnerEnvironmentConfig {
     #[serde(default)]
     ssh_preferred_ip_version: SSHPreferredIPVersion,
     #[serde(default)]
-    ipv4_network: Option<NspawnRunnerEnvironmentIPv4NetworkConfig>,
+    ipv4_network: Option<NspawnRunnerEnvironmentIpv4NetworkConfig>,
     #[serde(default)]
-    ipv6_network: Option<NspawnRunnerEnvironmentIPv6NetworkConfig>,
+    ipv6_network: Option<NspawnRunnerEnvironmentIpv6NetworkConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -441,17 +439,18 @@ impl connector::Runner for NspawnRunner {
             &environment_cfg.ipv6_network,
         ) {
             (None, _, _, _) => None,
-            (Some(port), SSHPreferredIPVersion::V4, Some(ipv4_network), _) => {
-                Some(SocketAddr::V4(SocketAddrV4::new(ipv4_network.ip, *port)))
-            }
-            (Some(port), SSHPreferredIPVersion::V6, _, Some(ipv6_network)) => Some(SocketAddr::V6(
-                SocketAddrV6::new(ipv6_network.ip, *port, 0, 0),
+            (Some(port), SSHPreferredIPVersion::V4, Some(ipv4_network), _) => Some(SocketAddr::V4(
+                SocketAddrV4::new(ipv4_network.address, *port),
             )),
-            (Some(port), _, Some(ipv4_network), _) => {
-                Some(SocketAddr::V4(SocketAddrV4::new(ipv4_network.ip, *port)))
-            }
+            (Some(port), SSHPreferredIPVersion::V6, _, Some(ipv6_network)) => Some(SocketAddr::V6(
+                SocketAddrV6::new(ipv6_network.address, *port, 0, 0),
+            )),
+            (Some(port), _, Some(ipv4_network), _) => Some(SocketAddr::V4(SocketAddrV4::new(
+                ipv4_network.address,
+                *port,
+            ))),
             (Some(port), _, _, Some(ipv6_network)) => Some(SocketAddr::V6(SocketAddrV6::new(
-                ipv6_network.ip,
+                ipv6_network.address,
                 *port,
                 0,
                 0,
@@ -1041,6 +1040,43 @@ impl control_socket::Runner for NspawnRunner {
                 ref ssh_keys,
                 ..
             }) if *job_id == tgt_job_id => Some(ssh_keys.clone()),
+            Some(_) => None,
+        }
+    }
+
+    async fn network_config(
+        &self,
+        tgt_job_id: Uuid,
+    ) -> Option<siplane_rs::api::runner_puppet::NetworkConfig> {
+        match *self.current_job.lock().await {
+            None => None,
+            Some(NspawnRunnerJob {
+                ref job_id,
+                ref environment_config,
+                ..
+            }) if *job_id == tgt_job_id => {
+                let hostname = format!("job-{}", format!("{}", job_id).split_at(10).0);
+                Some(siplane_rs::api::runner_puppet::NetworkConfig {
+                    hostname,
+                    interface: Some("host0".to_string()),
+                    ipv4: environment_config.ipv4_network.as_ref().map(|ip4| {
+                        siplane_rs::api::runner_puppet::Ipv4NetworkConfig {
+                            address: ip4.address,
+                            prefix_length: ip4.prefix_length,
+                            gateway: ip4.gateway,
+                            nameservers: ip4.nameservers.clone(),
+                        }
+                    }),
+                    ipv6: environment_config.ipv6_network.as_ref().map(|ip6| {
+                        siplane_rs::api::runner_puppet::Ipv6NetworkConfig {
+                            address: ip6.address,
+                            prefix_length: ip6.prefix_length,
+                            gateway: ip6.gateway,
+                            nameservers: ip6.nameservers.clone(),
+                        }
+                    }),
+                })
+            }
             Some(_) => None,
         }
     }

@@ -42,6 +42,14 @@ impl<R: Runner> UnixSeqpacketControlSocket<R> {
                 ssh_keys: runner.ssh_keys(job_id).await.unwrap_or_else(|| vec![]),
             },
 
+            PuppetReq::NetworkConfig => {
+                if let Some(nc) = runner.network_config(job_id).await {
+                    RunnerResp::NetworkConfig(nc)
+                } else {
+                    RunnerResp::JobNotFound
+                }
+            }
+
             _ => RunnerResp::UnsupportedRequest,
         }
     }

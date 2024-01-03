@@ -49,11 +49,13 @@ pub mod rest {
     #[derive(Serialize, Debug, Clone)]
     #[serde(rename_all = "snake_case")]
     pub enum JobSessionConnectionInfo {
+        #[serde(rename = "direct_ssh")]
         DirectSSH {
             hostname: String,
             port: u16,
             host_key_fingerprints: Vec<String>,
         },
+        #[serde(rename = "rendezvous_ssh")]
         RendezvousSSH {
             hostname: String,
             port: u16,
