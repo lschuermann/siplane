@@ -16,6 +16,7 @@ simplelog = "0.12.1"
 siplane-rs = { path = "../siplane-rs" }
 siplane-sse-connector = { path = "../sse-connector" }
 siplane-unix-seqpacket-control-socket = { path = "../unix-seqpacket-control-socket" }
+rendezvous-proxy = { path = "../rendezvous-proxy" }
 tokio = { version = "1.35.1", default-features = false, features = ["rt-multi-thread", "process", "fs"] }
 toml = "0.8.8"
 uuid = "1.6.1"

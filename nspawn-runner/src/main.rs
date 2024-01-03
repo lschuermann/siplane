@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use clap::Parser;
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::Deserialize;
 use simplelog::{ColorChoice, Config as SimpleLogConfig, LevelFilter, TermLogger, TerminalMode};
 use tokio::process::Command;
@@ -14,15 +14,12 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use siplane_rs::api::coord_runner::rest as rest_api;
+use siplane_rs::api::coord_runner::sse as sse_api;
 use siplane_rs::connector;
 use siplane_rs::control_socket;
 use siplane_rs::dummy_connector::DummyRunnerConnector;
 use siplane_sse_connector::SSERunnerConnector;
 use siplane_unix_seqpacket_control_socket::UnixSeqpacketControlSocket;
-
-// mod connector;
-// mod control_socket;
-// mod test_connector;
 
 #[derive(Parser, Debug, Clone)]
 struct NspawnRunnerArgs {
@@ -63,13 +60,61 @@ pub struct NspawnRunnerEnvironmentDeviceConfig {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(unused)] // TODO: remove
+pub struct NspawnRunnerEnvironmentIPv4NetworkConfig {
+    ip: std::net::Ipv4Addr,
+    prefix_length: u8,
+    #[serde(default)]
+    gateway: Option<std::net::Ipv4Addr>,
+    #[serde(default)]
+    nameserver: Option<std::net::Ipv4Addr>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[allow(unused)] // TODO: remove
+pub struct NspawnRunnerEnvironmentIPv6NetworkConfig {
+    ip: std::net::Ipv6Addr,
+    prefix_length: u8,
+    #[serde(default)]
+    gateway: Option<std::net::Ipv6Addr>,
+    #[serde(default)]
+    nameserver: Option<std::net::Ipv6Addr>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum SSHPreferredIPVersion {
+    Unspecified,
+    V4,
+    V6,
+}
+
+impl Default for SSHPreferredIPVersion {
+    fn default() -> Self {
+        SSHPreferredIPVersion::Unspecified
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentConfig {
+    #[serde(default)]
     init: Option<String>,
     shutdown_timeout: u64,
+    #[serde(default)]
     mount: Vec<NspawnRunnerEnvironmentMountConfig>,
+    #[serde(default)]
     device: Vec<NspawnRunnerEnvironmentDeviceConfig>,
+    #[serde(default)]
     zfsroot: Option<NspawnRunnerEnvironmentZfsRootConfig>,
     control_socket_path: PathBuf,
+    #[serde(default)]
+    ssh_port: Option<u16>,
+    #[serde(default)]
+    ssh_preferred_ip_version: SSHPreferredIPVersion,
+    #[serde(default)]
+    ipv4_network: Option<NspawnRunnerEnvironmentIPv4NetworkConfig>,
+    #[serde(default)]
+    ipv6_network: Option<NspawnRunnerEnvironmentIPv6NetworkConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -91,6 +136,7 @@ pub struct NspawnRunnerJob {
     console_streamer_handle: tokio::task::JoinHandle<()>,
     console_streamer_cmd_chan: tokio::sync::mpsc::Sender<ConsoleStreamerCommand>,
     control_socket: UnixSeqpacketControlSocket<NspawnRunner>,
+    ssh_rendezvous_proxies: Vec<rendezvous_proxy::RendezvousProxy>,
 
     // Pointers to created resources, to delete when shutting down (if not
     // indicated otherwise):
@@ -249,6 +295,7 @@ impl connector::Runner for NspawnRunner {
         job_id: Uuid,
         environment_id: Uuid,
         ssh_keys: Vec<String>,
+        ssh_rendezvous_servers: Vec<sse_api::RendezvousServerSpec>,
     ) {
         // This method must not block for long periods of time. We're provided
         // an &Arc<Self> to be able to launch async tasks, while returning
@@ -363,6 +410,52 @@ impl connector::Runner for NspawnRunner {
             )
         })
         .unwrap();
+
+        // Spawn rendezvous proxy clients for SSH connections to the
+        // container IP, if one is configured that we can reach.
+        use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+
+        let ssh_socket_addr = match (
+            &environment_cfg.ssh_port,
+            &environment_cfg.ssh_preferred_ip_version,
+            &environment_cfg.ipv4_network,
+            &environment_cfg.ipv6_network,
+        ) {
+            (None, _, _, _) => None,
+            (Some(port), SSHPreferredIPVersion::V4, Some(ipv4_network), _) => {
+                Some(SocketAddr::V4(SocketAddrV4::new(ipv4_network.ip, *port)))
+            }
+            (Some(port), SSHPreferredIPVersion::V6, _, Some(ipv6_network)) => Some(SocketAddr::V6(
+                SocketAddrV6::new(ipv6_network.ip, *port, 0, 0),
+            )),
+            (Some(port), _, Some(ipv4_network), _) => {
+                Some(SocketAddr::V4(SocketAddrV4::new(ipv4_network.ip, *port)))
+            }
+            (Some(port), _, _, Some(ipv6_network)) => Some(SocketAddr::V6(SocketAddrV6::new(
+                ipv6_network.ip,
+                *port,
+                0,
+                0,
+            ))),
+            _ => None,
+        };
+
+        let mut ssh_rendezvous_proxies = Vec::with_capacity(ssh_rendezvous_servers.len());
+        if let Some(sa) = ssh_socket_addr {
+            for server_spec in ssh_rendezvous_servers {
+                ssh_rendezvous_proxies.push(
+                    rendezvous_proxy::RendezvousProxy::start(
+                        server_spec.client_id,
+                        server_spec.server_base_url,
+                        sa,
+                        server_spec.auth_token,
+                        Duration::from_secs(60),
+                        Duration::from_secs(10),
+                    )
+                    .await,
+                );
+            }
+        }
 
         // All resources have been allocated, mark the container as booting:
         this.connector
@@ -645,6 +738,7 @@ impl connector::Runner for NspawnRunner {
             console_streamer_handle: console_streamer,
             console_streamer_cmd_chan: streamer_chan_tx,
             root_fs_mountpoint: Some(root_fs_mountpoint),
+            ssh_rendezvous_proxies,
             control_socket,
             zfs_root_fs,
         });
@@ -768,6 +862,13 @@ impl connector::Runner for NspawnRunner {
             .expect("Console streamer task has quit before receiving shutdown signal!");
         job.console_streamer_handle.await.unwrap();
         debug!("Console streamer has shut down.");
+
+        // Shut down all rendezvous proxy clients:
+        for proxy in job.ssh_rendezvous_proxies {
+            if let Err(e) = proxy.shutdown().await {
+                warn!("Error while shutting down rendezvous proxy client: {:?}", e);
+            }
+        }
 
         // Unmount the container's root file system:
         if let Some(mountpoint) = job.root_fs_mountpoint {

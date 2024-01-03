@@ -1,11 +1,17 @@
-use crate::api::coord_runner::rest;
+use crate::api::coord_runner::{rest, sse};
 use async_trait::async_trait;
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[async_trait]
 pub trait Runner: Send + Sync + 'static {
-    async fn start_job(this: &Arc<Self>, job_id: Uuid, environment_id: Uuid, ssh_keys: Vec<String>);
+    async fn start_job(
+        this: &Arc<Self>,
+        job_id: Uuid,
+        environment_id: Uuid,
+        ssh_keys: Vec<String>,
+        ssh_rendezvous_servers: Vec<sse::RendezvousServerSpec>,
+    );
     async fn stop_job(this: &Arc<Self>, job_id: Uuid);
 }
 

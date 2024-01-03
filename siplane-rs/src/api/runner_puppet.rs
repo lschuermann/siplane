@@ -22,12 +22,12 @@ pub enum PuppetEvent {
 #[serde(untagged)]
 pub enum PuppetMsg {
     Event {
-	puppet_event_id: u64,
-	event: PuppetEvent
+        puppet_event_id: u64,
+        event: PuppetEvent,
     },
     Request {
-	request_id: u64,
-	request: PuppetReq,
+        request_id: u64,
+        request: PuppetReq,
     },
 }
 
@@ -47,9 +47,7 @@ pub enum RunnerEvent {
 pub enum RunnerResp {
     // Request reponses:
     PingResp,
-    SSHKeysResp {
-        ssh_keys: Vec<String>,
-    },
+    SSHKeysResp { ssh_keys: Vec<String> },
 
     // Error responses:
     UnsupportedRequest,
@@ -60,17 +58,17 @@ pub enum RunnerResp {
 #[serde(untagged)]
 pub enum RunnerMsg {
     Event {
-	runner_event_id: u64,
-	event: RunnerEvent
+        runner_event_id: u64,
+        event: RunnerEvent,
     },
     Response {
-	request_id: u64,
-	response: RunnerResp,
+        request_id: u64,
+        response: RunnerResp,
     },
 
     // Generic error, when no more specific error applies (for
     // instance, if a message cannot be parsed at all)
     Error {
-	message: String,
+        message: String,
     },
 }

@@ -4,6 +4,14 @@ pub mod sse {
 
     #[derive(Deserialize, Debug, Clone)]
     #[serde(rename_all = "snake_case")]
+    pub struct RendezvousServerSpec {
+        pub client_id: Uuid,
+        pub server_base_url: String,
+        pub auth_token: String,
+    }
+
+    #[derive(Deserialize, Debug, Clone)]
+    #[serde(rename_all = "snake_case")]
     #[serde(tag = "type")]
     pub enum SSEMessage {
         UpdateState,
@@ -11,6 +19,7 @@ pub mod sse {
             job_id: Uuid,
             environment_id: Uuid,
             ssh_keys: Vec<String>,
+            ssh_rendezvous_servers: Vec<RendezvousServerSpec>,
         },
         StopJob {
             job_id: Uuid,

@@ -194,15 +194,15 @@ impl<R: Runner> UnixSeqpacketControlSocket<R> {
                                         ))
                                         .await
                                 {
-				    match e.kind() {
-					std::io::ErrorKind::BrokenPipe => {
-					    warn!("Puppet closed connection.");
-					    break;
-					}
-					_ => {
-					    warn!("Unknown error while sending answer to control socket request, ignoring: {:?}", e);
-					}
-				    }
+                                    match e.kind() {
+                                        std::io::ErrorKind::BrokenPipe => {
+                                            warn!("Puppet closed connection.");
+                                            break;
+                                        }
+                                        _ => {
+                                            warn!("Unknown error while sending answer to control socket request, ignoring: {:?}", e);
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -4,5 +4,8 @@ members = [
     "siplane-rs",
     "nspawn-runner",
     "puppet",
-    "sse-connector", "unix-seqpacket-control-socket",
+    "sse-connector",
+    "unix-seqpacket-control-socket",
+    "rendezvous-server",
+    "rendezvous-proxy",
 ]

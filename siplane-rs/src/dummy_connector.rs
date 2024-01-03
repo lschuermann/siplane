@@ -39,7 +39,7 @@ impl<R: Runner> RunnerConnector for DummyRunnerConnector<R> {
             "Requesting new job {}, environment: {}, ssh keys: {:?}",
             job_id, self.environment_id, &ssh_keys
         );
-        R::start_job(&runner, job_id, self.environment_id, ssh_keys).await;
+        R::start_job(&runner, job_id, self.environment_id, ssh_keys, vec![]).await;
 
         // Wait for SIGINT:
         info!("Job started, waiting for CTRL+C");

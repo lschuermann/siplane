@@ -49,8 +49,16 @@ impl<R: Runner> SSERunnerConnector<R> {
                         job_id,
                         environment_id,
                         ssh_keys,
+                        ssh_rendezvous_servers,
                     }) => {
-                        R::start_job(runner, job_id, environment_id, ssh_keys).await;
+                        R::start_job(
+                            runner,
+                            job_id,
+                            environment_id,
+                            ssh_keys,
+                            ssh_rendezvous_servers,
+                        )
+                        .await;
                     }
 
                     Ok(SSEMessage::StopJob { job_id }) => {
