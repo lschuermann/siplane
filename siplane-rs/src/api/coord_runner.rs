@@ -54,6 +54,11 @@ pub mod rest {
             port: u16,
             host_key_fingerprints: Vec<String>,
         },
+        RendezvousSSH {
+            hostname: String,
+            port: u16,
+            host_key_fingerprints: Vec<String>,
+        },
     }
 
     #[derive(Serialize, Debug, Clone)]

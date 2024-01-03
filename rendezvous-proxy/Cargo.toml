@@ -21,6 +21,6 @@ serde_json = "1.0.108"
 simplelog = "0.12.1"
 thiserror = "1.0.52"
 tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros", "sync", "signal"] }
-tokio-tungstenite = { version = "0.21.0", features = ["rustls"] }
+tokio-tungstenite = { version = "0.21.0", features = ["rustls-native-certs", "rustls-tls-native-roots"] }
 tungstenite = { version = "0.21.0", default-features = false }
 uuid = "1.6.1"

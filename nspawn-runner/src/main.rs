@@ -719,11 +719,33 @@ impl connector::Runner for NspawnRunner {
             }
         });
 
+        // TODO: it'd be nice if this didn't have to be
+        // sequential. But using tokio's JoinSet we get lifetime
+        // issues here, as .spawn() requires a 'static borrow of the
+        // rendezvous proxies.
+        let mut rendezvous_proxy_addrs = vec![];
+        for proxy in ssh_rendezvous_proxies.iter() {
+            match proxy.public_addr(Duration::from_secs(5)).await {
+                Some((hostname, port)) => {
+                    rendezvous_proxy_addrs.push(
+                        rest_api::JobSessionConnectionInfo::RendezvousSSH {
+                            hostname,
+                            port,
+                            host_key_fingerprints: vec![],
+                        },
+                    );
+                }
+                None => {
+                    warn!("Rendezvous proxy did not provide public address before timeout.");
+                }
+            }
+        }
+
         this.connector
             .post_job_state(
                 job_id,
                 rest_api::JobState::Ready {
-                    connection_info: vec![],
+                    connection_info: rendezvous_proxy_addrs,
                     status_message: None,
                 },
             )
