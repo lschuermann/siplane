@@ -7,6 +7,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use rocket::response::stream::{Event, EventStream};
 use rocket::State;
 use rocket_ws as ws;
@@ -74,7 +75,10 @@ impl RendezvousServer {
         rendezvous_endpoint_base: String,
         listen_ports: Range<u16>,
     ) -> Arc<Self> {
-        let listen_port_pool = listen_ports.into_iter().collect();
+        use rand::seq::SliceRandom;
+        let mut listen_port_pool_vec: Vec<u16> = listen_ports.into_iter().collect();
+        listen_port_pool_vec.shuffle(&mut rand::thread_rng());
+        let listen_port_pool = listen_port_pool_vec.into_iter().collect();
 
         Arc::new(RendezvousServer {
             listen_addr,
@@ -302,15 +306,52 @@ async fn accept(
     } }
 }
 
+/// TCP <-> WebSocket Rendezvous Server
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Public hostname for incoming TCP connections
+    #[arg(short = 'p', long)]
+    public_hostname: String,
+
+    /// WebSocket server base url, including the `/accept` path (e.g.,
+    /// ws://localhost:8000/accept)
+    #[arg(short = 'w', long)]
+    websocket_base_url: String,
+
+    /// TCP port range start
+    #[arg(short = 's')]
+    tcp_port_range_start: u16,
+
+    /// TCP port range end
+    #[arg(short = 'e')]
+    tcp_port_range_end: u16,
+}
+
 #[launch]
 fn rocket() -> _ {
+    use simplelog::{
+        ColorChoice, Config as SimpleLogConfig, LevelFilter, TermLogger, TerminalMode,
+    };
+
+    let args = Args::parse();
+
+    // TODO: get log level from command line
+    TermLogger::init(
+        LevelFilter::Debug,
+        SimpleLogConfig::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
+
     let state: Arc<RendezvousServer> = RendezvousServer::new(
         IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-        "localhost".to_string(),
-        "ws://localhost:8000/accept".to_string(),
+        args.public_hostname,
+        args.websocket_base_url,
         Range {
-            start: 40000,
-            end: 50000,
+            start: args.tcp_port_range_start,
+            end: args.tcp_port_range_end,
         },
     );
 

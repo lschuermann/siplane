@@ -1221,10 +1221,13 @@ name = "rendezvous-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
+ "rand",
  "rocket",
  "rocket_ws",
  "serde",
  "serde_json",
+ "simplelog",
  "tokio",
  "uuid",
 ]
