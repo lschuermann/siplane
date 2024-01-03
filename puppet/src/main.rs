@@ -230,7 +230,7 @@ impl RunnerSocketClient {
     }
 
     pub async fn get_network_config(&self) -> NetworkConfig {
-        let resp = self.request(PuppetReq::SSHKeys).await;
+        let resp = self.request(PuppetReq::NetworkConfig).await;
         match resp {
             RunnerResp::NetworkConfig(nc) => nc,
             _ => {
