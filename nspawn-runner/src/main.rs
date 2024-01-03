@@ -43,10 +43,8 @@ pub struct NspawnRunnerEnvironmentZfsRootConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentMountConfig {
-    // TODO: this should be a PathBuf
-    src: String,
-    // TODO: this should be a PathBuf
-    dst: String,
+    src: PathBuf,
+    dst: PathBuf,
     readonly: bool,
 }
 
@@ -54,11 +52,27 @@ fn default_device_config_resolve_symlink() -> bool {
     true
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceConfigAddMount {
+    No,
+    ReadWrite,
+    ReadOnly,
+}
+
+impl Default for DeviceConfigAddMount {
+    fn default() -> Self {
+        DeviceConfigAddMount::No
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentDeviceConfig {
     device_node: PathBuf,
     #[serde(default = "default_device_config_resolve_symlink")]
     resolve_symlink: bool,
+    #[serde(default)]
+    add_mount: DeviceConfigAddMount,
     read: bool,
     write: bool,
     create: bool,
@@ -478,6 +492,7 @@ impl connector::Runner for NspawnRunner {
             "--property=DevicePolicy=closed".to_string(),
         ];
 
+        let mut device_mounts = vec![];
         for device_cfg in environment_cfg.device.iter() {
             if !device_cfg.read && !device_cfg.write && !device_cfg.create {
                 // Don't add devices with no permissions:
@@ -497,6 +512,24 @@ impl connector::Runner for NspawnRunner {
                             device_cfg.device_node, e
                         );
                     }
+                }
+            }
+
+            match &device_cfg.add_mount {
+                DeviceConfigAddMount::No => (),
+                DeviceConfigAddMount::ReadOnly => {
+                    device_mounts.push(NspawnRunnerEnvironmentMountConfig {
+                        src: device_node.clone(),
+                        dst: device_node.clone(),
+                        readonly: true,
+                    })
+                }
+                DeviceConfigAddMount::ReadWrite => {
+                    device_mounts.push(NspawnRunnerEnvironmentMountConfig {
+                        src: device_node.clone(),
+                        dst: device_node.clone(),
+                        readonly: false,
+                    })
                 }
             }
 
@@ -523,11 +556,21 @@ impl connector::Runner for NspawnRunner {
         ]);
 
         // Add all additional mountpoints:
-        for mount_cfg in environment_cfg.mount.iter() {
+        for mount_cfg in environment_cfg.mount.iter().chain(device_mounts.iter()) {
             if mount_cfg.readonly {
-                run_args.push(format!("--bind-ro={}:{}", mount_cfg.src, mount_cfg.dst));
+                // TODO: this should be able to contain non-UTF8 characters:
+                run_args.push(format!(
+                    "--bind-ro={}:{}",
+                    mount_cfg.src.display(),
+                    mount_cfg.dst.display()
+                ));
             } else {
-                run_args.push(format!("--bind={}:{}", mount_cfg.src, mount_cfg.dst));
+                // TODO: this should be able to contain non-UTF8 characters:
+                run_args.push(format!(
+                    "--bind={}:{}",
+                    mount_cfg.src.display(),
+                    mount_cfg.dst.display()
+                ));
             }
         }
 
