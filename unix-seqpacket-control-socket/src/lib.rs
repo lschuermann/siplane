@@ -48,9 +48,10 @@ impl<R: Runner> UnixSeqpacketControlSocket<R> {
 
     pub async fn new_unix_seqpacket(job_id: Uuid, addr: &Path, runner: Arc<R>) -> Result<Self> {
         let mut server_socket: UnixSeqpacketListener = UnixSeqpacketListener::bind(addr)
-            .with_context(|| format!("Binding to UNIX socket at \"{:?}\"", addr))?;
+            .with_context(|| format!("Binding to UNIX socket at {:?}", addr))?;
+
         info!(
-            "Opened control socket UNIX SeqPacket listener on \"{:?}\"",
+            "Opened control socket UNIX SeqPacket listener on {:?}",
             addr
         );
 

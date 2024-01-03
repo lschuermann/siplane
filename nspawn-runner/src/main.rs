@@ -50,10 +50,15 @@ pub struct NspawnRunnerEnvironmentMountConfig {
     readonly: bool,
 }
 
+fn default_device_config_resolve_symlink() -> bool {
+    true
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentDeviceConfig {
-    // TODO: this should be a PathBuf
-    device_node: String,
+    device_node: PathBuf,
+    #[serde(default = "default_device_config_resolve_symlink")]
+    resolve_symlink: bool,
     read: bool,
     write: bool,
     create: bool,
@@ -479,9 +484,26 @@ impl connector::Runner for NspawnRunner {
                 continue;
             }
 
+            let mut device_node = device_cfg.device_node.clone();
+
+            if device_cfg.resolve_symlink {
+                match tokio::fs::canonicalize(&device_cfg.device_node).await {
+                    Ok(canon) => {
+                        device_node = canon;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get canonical path to device node {:?}: {:?}",
+                            device_cfg.device_node, e
+                        );
+                    }
+                }
+            }
+
             run_args.push(format!(
                 "--property=DeviceAllow={} {}{}{}",
-                &device_cfg.device_node,
+                // TODO: this should retain non-UTF8 characters
+                device_node.display(),
                 if device_cfg.read { "r" } else { "" },
                 if device_cfg.write { "w" } else { "" },
                 if device_cfg.create { "m" } else { "" },
@@ -755,7 +777,7 @@ impl connector::Runner for NspawnRunner {
             job_id,
             _environment_id: environment_id,
             environment_config: environment_cfg.clone(),
-            ssh_keys: ssh_keys,
+            ssh_keys,
             nspawn_proc: child,
             console_streamer_handle: console_streamer,
             console_streamer_cmd_chan: streamer_chan_tx,
