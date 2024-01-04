@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# Enable xtrace for easier debugging during mkosi execution
+set -o xtrace
+
+# Exit on first error
+set -e
+
+if [ "$1" != "final" ]; then
+    # Only run in the final stage
+    exit 0
+fi
+
+# ---------- System Preparation ------------------------------------------------
+
+# Xilinx tools won't run without the en_US.UTF-8 locale, so generate that. We
+# can't set it globally in the nspawn container unfortunately:
+#
+# root@image:~# localectl set-locale en_US.UTF-8
+# Failed to issue method call: Access denied
+
+locale-gen en_US.UTF-8
+
+# ---------- Initial Clone of OpenTitan Repository -----------------------------
+
+# Do this first, as it depends on a network connection and will thus fail
+# without one. We do excercise the network later on as well (during the Bazel
+# builds), but this way we won't waste time going through the Vivado Lab Tools
+# installer with broken networking.
+
+cd /root
+git clone https://github.com/lowRISC/opentitan
+cd /root/opentitan
+git checkout b610a0e126130b4d81d5961f81104313292542e1
+cd /
+
+# ---------- Xilinx Vivado Lab Tools installation ------------------------------
+
+echo "Installing Xilinx Vivado Lab Tools"
+mkdir -p /opt/XilinxLabInstall/
+cd /opt/XilinxLabInstall/
+
+# We work in user namespaces, and so tar can't necessarily restore the
+# proper ownership information encoded in the archive. That doesn't
+# really matter though, so simply don't preserve ownership.
+tar --no-same-owner -xvf /opt/Xilinx_Vivado_Lab_Lin_2021.1_0610_2318.tar.gz || true
+
+cd /opt/XilinxLabInstall/Xilinx_Vivado_Lab_Lin_2021.1_0610_2318/
+./xsetup --batch Install --agree XilinxEULA,3rdPartyEULA,WebTalkTerms --config /opt/xilinx_vivado_lab_lin_install_config.txt
+
+cd /
+rm -rf /opt/XilinxLabInstall
+rm /opt/Xilinx_Vivado_Lab_Lin_2021.1_0610_2318.tar.gz
+
+echo "Adding the Xilinx Vivado Lab tools settings to /etc/profile.d"
+ln -s /tools/Xilinx/Vivado_Lab/2021.1/settings64.sh /etc/profile.d/99-Vivado_Lab_2021_1_settings64.sh
+
+# ---------- Initial OpenTitan builds, vendoring toolchains into the image -----
+
+# Source the Vivado settings for the initial Bazel build
+#
+# This script really requires bash, not sh. It invokes `source`, which is not
+# available in shells that run in sh-compatibility mode.
+source /etc/profile.d/99-Vivado_Lab_2021_1_settings64.sh
+
+cd /root/opentitan/
+./bazelisk.sh build //sw/device/tests:uart_smoketest_fpga_cw310_test_rom
+./bazelisk.sh build //sw/host/opentitantool
+cd /

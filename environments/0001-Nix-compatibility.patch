@@ -1,0 +1,67 @@
+From 09ae0865281b44d2e6c1c8eaa82b382115192f5c Mon Sep 17 00:00:00 2001
+From: Leon Schuermann <leon@is.currently.online>
+Date: Thu, 4 Jan 2024 07:02:24 -0500
+Subject: [PATCH] Nix compatibility
+
+---
+ mkosi/bubblewrap.py           | 4 ++++
+ mkosi/distributions/ubuntu.py | 2 +-
+ mkosi/installer/apt.py        | 5 +++++
+ 3 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/mkosi/bubblewrap.py b/mkosi/bubblewrap.py
+index 2a5c75da..4321915a 100644
+--- a/mkosi/bubblewrap.py
++++ b/mkosi/bubblewrap.py
+@@ -83,6 +83,10 @@ def bwrap(
+         "bwrap",
+         "--ro-bind", "/usr", "/usr",
+         "--ro-bind-try", "/nix/store", "/nix/store",
++        # Nix compatibility mounts
++        "--ro-bind", "/bin", "/usr/bin",
++        "--symlink", "/usr/bin", "/bin",
++        "--ro-bind", "/run/current-system/sw/bin", "/run/current-system/sw/bin",
+         # This mount is writable so bwrap can create extra directories or symlinks inside of it as needed. This isn't a
+         # problem as the package manager directory is created by mkosi and thrown away when the build finishes.
+         "--bind", context.pkgmngr / "etc", "/etc",
+diff --git a/mkosi/distributions/ubuntu.py b/mkosi/distributions/ubuntu.py
+index 3b01c05c..eee93cd1 100644
+--- a/mkosi/distributions/ubuntu.py
++++ b/mkosi/distributions/ubuntu.py
+@@ -26,7 +26,7 @@ class Installer(debian.Installer):
+         else:
+             mirror = context.config.mirror or "http://ports.ubuntu.com"
+ 
+-        signedby = "[signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg]"
++        signedby = "[signed-by=/home/leons/Downloads/ubuntu-archive-keyring.gpg]"
+ 
+         # From kinetic onwards, the usr-is-merged package is available in universe and is required by
+         # mkosi to set up a proper usr-merged system so we add the universe repository unconditionally.
+diff --git a/mkosi/installer/apt.py b/mkosi/installer/apt.py
+index 796ffda0..ac8c20c4 100644
+--- a/mkosi/installer/apt.py
++++ b/mkosi/installer/apt.py
+@@ -54,6 +54,10 @@ def apt_cmd(context: Context, command: str) -> list[PathString]:
+         "DEBCONF_INTERACTIVE_SEEN=true",
+         "INITRD=No",
+         command,
++        "-o", "APT::Get::AllowUnauthenticated=true",
++        # "-o", "Debug::Acquire::gpgv=true",
++        "-o", "Acquire::AllowInsecureRepositories=true",
++        "-o", "Acquire::AllowDowngradeToInsecureRepositories=true",
+         "-o", f"APT::Architecture={debarch}",
+         "-o", f"APT::Architectures={debarch}",
+         "-o", f"APT::Install-Recommends={str(context.config.with_recommends).lower()}",
+@@ -63,6 +67,7 @@ def apt_cmd(context: Context, command: str) -> list[PathString]:
+         "-o", "APT::Get::Allow-Change-Held-Packages=true",
+         "-o", "APT::Get::Allow-Remove-Essential=true",
+         "-o", "APT::Sandbox::User=root",
++        "-o", "Apt::Key::gpgvcommand=/nix/store/c015armnkhr6v18za0rypm7sh1i8js8w-gnupg-2.4.1/bin/gpgv",
+         "-o", f"Dir::Cache={context.cache_dir / 'cache/apt'}",
+         "-o", f"Dir::State={context.cache_dir / 'lib/apt'}",
+         "-o", f"Dir::State::Status={context.root / 'var/lib/dpkg/status'}",
+
+base-commit: a7e01d4cb5ea97ac4fdc6e7b2b4d384a02cfea3d
+-- 
+2.42.0
+
