@@ -229,6 +229,7 @@ defmodule Siplane.Job do
   end
 
   def put_console_log(job_id, _offset, _next, log) do
+    IO.puts("Console log: #{log}")
     validate_job_id(job_id)
     Registry.dispatch(__MODULE__.SubscriberRegistry, job_id, fn subscribers ->
       for {pid, _} <- subscribers, do: send(pid, {:job_event, job_id, :console_log_event, log})

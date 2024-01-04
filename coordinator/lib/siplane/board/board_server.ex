@@ -131,7 +131,12 @@ defmodule Siplane.Board.Server do
 		type: :start_job,
 		job_id: UUID.binary_to_string!(job_id),
 		environment_id: job.environment_id,
-		ssh_keys: []
+		ssh_keys: [],
+		ssh_rendezvous_servers: [%{
+		  client_id: UUID.binary_to_string!(job_id),
+		  server_base_url: "https://sns29.cs.princeton.edu/ssh-rendezvous",
+		  auth_token: "helloworld",
+		}],
 	      }
 	    }
 	  )
