@@ -586,6 +586,8 @@ impl connector::Runner for NspawnRunner {
             run_args.push("--boot".to_string());
         }
 
+        info!("Executing \"systemd-run\" with arguments {:?}", run_args);
+
         let mut child = match tokio::process::Command::new("systemd-run")
             .args(run_args)
             .stdin(std::process::Stdio::null())
