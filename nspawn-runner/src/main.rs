@@ -79,6 +79,12 @@ pub struct NspawnRunnerEnvironmentDeviceConfig {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+pub struct NspawnRunnerEnvironmentVethConfig {
+    ifname_host: String,
+    ifname_container: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerEnvironmentIpv4NetworkConfig {
     address: std::net::Ipv4Addr,
     prefix_length: u8,
@@ -125,6 +131,8 @@ pub struct NspawnRunnerEnvironmentConfig {
     zfsroot: Option<NspawnRunnerEnvironmentZfsRootConfig>,
     control_socket_path: PathBuf,
     #[serde(default)]
+    veth: Vec<NspawnRunnerEnvironmentVethConfig>,
+    #[serde(default)]
     ssh_port: Option<u16>,
     #[serde(default)]
     ssh_preferred_ip_version: SSHPreferredIPVersion,
@@ -137,7 +145,6 @@ pub struct NspawnRunnerEnvironmentConfig {
 #[derive(Deserialize, Debug, Clone)]
 pub struct NspawnRunnerConfig {
     coordinator_base_url: String,
-    host_veth_name: String,
     board_id: Uuid,
     keepalive_timeout: u64,
     reconnect_wait: u64,
@@ -551,8 +558,15 @@ impl connector::Runner for NspawnRunner {
             "--keep-unit".to_string(),
             "--private-users=pick".to_string(),
             "--private-network".to_string(),
-            format!("--network-veth-extra={}:host0", this.config.host_veth_name),
         ]);
+
+        // Add veth network interfaces:
+        for veth_cfg in environment_cfg.veth.iter() {
+            run_args.push(format!(
+                "--network-veth-extra={}:{}",
+                veth_cfg.ifname_host, veth_cfg.ifname_container
+            ));
+        }
 
         // Add all additional mountpoints:
         for mount_cfg in environment_cfg.mount.iter().chain(device_mounts.iter()) {
