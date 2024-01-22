@@ -1654,78 +1654,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "siplane-nspawn-runner"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "log",
- "nix",
- "rendezvous-proxy",
- "serde",
- "simplelog",
- "siplane-rs",
- "siplane-sse-connector",
- "siplane-unix-seqpacket-control-socket",
- "tokio",
- "toml",
- "uuid",
-]
-
-[[package]]
-name = "siplane-puppet"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "log",
- "serde_json",
- "simplelog",
- "siplane-rs",
- "tokio",
- "tokio-seqpacket",
-]
-
-[[package]]
-name = "siplane-rs"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "log",
- "serde",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "siplane-sse-connector"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "eventsource-client",
- "futures",
- "reqwest",
- "serde_json",
- "siplane-rs",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "siplane-unix-seqpacket-control-socket"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "log",
- "serde_json",
- "siplane-rs",
- "tokio",
- "tokio-seqpacket",
- "uuid",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2139,6 +2067,78 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "treadmill-nspawn-runner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "log",
+ "nix",
+ "rendezvous-proxy",
+ "serde",
+ "simplelog",
+ "tokio",
+ "toml",
+ "treadmill-rs",
+ "treadmill-sse-connector",
+ "treadmill-unix-seqpacket-control-socket",
+ "uuid",
+]
+
+[[package]]
+name = "treadmill-puppet"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "log",
+ "serde_json",
+ "simplelog",
+ "tokio",
+ "tokio-seqpacket",
+ "treadmill-rs",
+]
+
+[[package]]
+name = "treadmill-rs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "log",
+ "serde",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "treadmill-sse-connector"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "eventsource-client",
+ "futures",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "treadmill-rs",
+ "uuid",
+]
+
+[[package]]
+name = "treadmill-unix-seqpacket-control-socket"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde_json",
+ "tokio",
+ "tokio-seqpacket",
+ "treadmill-rs",
+ "uuid",
 ]
 
 [[package]]

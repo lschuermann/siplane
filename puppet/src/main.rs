@@ -9,7 +9,7 @@ use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 use tokio_seqpacket::UnixSeqpacket;
 
-use siplane_rs::api::runner_puppet::{
+use treadmill_rs::api::runner_puppet::{
     NetworkConfig, PuppetEvent, PuppetMsg, PuppetReq, RunnerMsg, RunnerResp,
 };
 

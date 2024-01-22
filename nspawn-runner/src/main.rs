@@ -13,13 +13,13 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use siplane_rs::api::coord_runner::rest as rest_api;
-use siplane_rs::api::coord_runner::sse as sse_api;
-use siplane_rs::connector;
-use siplane_rs::control_socket;
-use siplane_rs::dummy_connector::DummyRunnerConnector;
-use siplane_sse_connector::SSERunnerConnector;
-use siplane_unix_seqpacket_control_socket::UnixSeqpacketControlSocket;
+use treadmill_rs::api::coord_runner::rest as rest_api;
+use treadmill_rs::api::coord_runner::sse as sse_api;
+use treadmill_rs::connector;
+use treadmill_rs::control_socket;
+use treadmill_rs::dummy_connector::DummyRunnerConnector;
+use treadmill_sse_connector::SSERunnerConnector;
+use treadmill_unix_seqpacket_control_socket::UnixSeqpacketControlSocket;
 
 #[derive(Parser, Debug, Clone)]
 struct NspawnRunnerArgs {
@@ -1063,7 +1063,7 @@ impl control_socket::Runner for NspawnRunner {
     async fn network_config(
         &self,
         tgt_job_id: Uuid,
-    ) -> Option<siplane_rs::api::runner_puppet::NetworkConfig> {
+    ) -> Option<treadmill_rs::api::runner_puppet::NetworkConfig> {
         match *self.current_job.lock().await {
             None => None,
             Some(NspawnRunnerJob {
@@ -1072,11 +1072,11 @@ impl control_socket::Runner for NspawnRunner {
                 ..
             }) if *job_id == tgt_job_id => {
                 let hostname = format!("job-{}", format!("{}", job_id).split_at(10).0);
-                Some(siplane_rs::api::runner_puppet::NetworkConfig {
+                Some(treadmill_rs::api::runner_puppet::NetworkConfig {
                     hostname,
                     interface: Some("host0".to_string()),
                     ipv4: environment_config.ipv4_network.as_ref().map(|ip4| {
-                        siplane_rs::api::runner_puppet::Ipv4NetworkConfig {
+                        treadmill_rs::api::runner_puppet::Ipv4NetworkConfig {
                             address: ip4.address,
                             prefix_length: ip4.prefix_length,
                             gateway: ip4.gateway,
@@ -1084,7 +1084,7 @@ impl control_socket::Runner for NspawnRunner {
                         }
                     }),
                     ipv6: environment_config.ipv6_network.as_ref().map(|ip6| {
-                        siplane_rs::api::runner_puppet::Ipv6NetworkConfig {
+                        treadmill_rs::api::runner_puppet::Ipv6NetworkConfig {
                             address: ip6.address,
                             prefix_length: ip6.prefix_length,
                             gateway: ip6.gateway,
@@ -1100,7 +1100,7 @@ impl control_socket::Runner for NspawnRunner {
 
 #[tokio::main]
 async fn main() {
-    use siplane_rs::connector::RunnerConnector;
+    use treadmill_rs::connector::RunnerConnector;
 
     TermLogger::init(
         LevelFilter::Debug,
@@ -1109,7 +1109,7 @@ async fn main() {
         ColorChoice::Auto,
     )
     .unwrap();
-    info!("Starting siplane nspawn runner.");
+    info!("Starting treadmill nspawn runner.");
 
     let args = NspawnRunnerArgs::parse();
 

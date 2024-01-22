@@ -7,8 +7,8 @@ use tokio::task::JoinHandle;
 use tokio_seqpacket::{UnixSeqpacket, UnixSeqpacketListener};
 use uuid::Uuid;
 
-use siplane_rs::api::runner_puppet::{PuppetMsg, PuppetReq, RunnerMsg, RunnerResp};
-use siplane_rs::control_socket::Runner;
+use treadmill_rs::api::runner_puppet::{PuppetMsg, PuppetReq, RunnerMsg, RunnerResp};
+use treadmill_rs::control_socket::Runner;
 
 #[derive(Debug, Clone)]
 enum ControlSocketTaskCommand {

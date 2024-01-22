@@ -1,4 +1,4 @@
-# Siplane
+# Treadmill
 
 To start your Phoenix server:
 

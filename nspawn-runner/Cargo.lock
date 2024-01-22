@@ -1299,7 +1299,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "siplane-nspawn-runner"
+name = "treadmill-nspawn-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",

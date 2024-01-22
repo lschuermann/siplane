@@ -1,4 +1,4 @@
-defmodule Siplane.Repo.Migrations.Init do
+defmodule Treadmill.Repo.Migrations.Init do
   use Ecto.Migration
 
   def change do

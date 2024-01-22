@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "siplane-rs",
+    "treadmill-rs",
     "nspawn-runner",
     "puppet",
     "sse-connector",

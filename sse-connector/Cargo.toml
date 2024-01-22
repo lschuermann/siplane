@@ -1,12 +1,12 @@
 [package]
-name = "siplane-sse-connector"
+name = "treadmill-sse-connector"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-siplane-rs = { path = "../siplane-rs" }
+treadmill-rs = { path = "../treadmill-rs" }
 
 async-trait = "0.1.75"
 eventsource-client = "0.12.2"

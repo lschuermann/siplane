@@ -5,8 +5,8 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use siplane_rs::api::coord_runner::{rest as rest_api, sse as sse_api};
-use siplane_rs::connector::{Runner, RunnerConnector};
+use treadmill_rs::api::coord_runner::{rest as rest_api, sse as sse_api};
+use treadmill_rs::connector::{Runner, RunnerConnector};
 
 pub struct SSERunnerConnector<R: Runner> {
     coord_url: String,
@@ -184,10 +184,10 @@ impl<R: Runner> RunnerConnector for SSERunnerConnector<R> {
                 self.coord_url,
                 job_id.to_string()
             ))
-            .header("X-Siplane-Console-Offset", format!("{}", offset))
-            .header("X-Siplane-Console-Next", format!("{}", next))
+            .header("X-Treadmill-Console-Offset", format!("{}", offset))
+            .header("X-Treadmill-Console-Next", format!("{}", next))
             .header(
-                "X-Siplane-Console-Stdiomap",
+                "X-Treadmill-Console-Stdiomap",
                 serde_json::to_string(&stdio_map).unwrap(),
             )
             .header("Content-Type", "application/octet-stream")

@@ -40,7 +40,7 @@ mkShell {
     source ./env
     set +a
 
-    [ ! -d $PGDATA ] && PGHOST="$PGDATA" pg_ctl initdb -o "-U siplane_dev" && cat "$postgresConf" >> $PGDATA/postgresql.conf
+    [ ! -d $PGDATA ] && PGHOST="$PGDATA" pg_ctl initdb -o "-U treadmill_dev" && cat "$postgresConf" >> $PGDATA/postgresql.conf
 
     pg_ctl -o "-k $PGDATA" start && {
       trap 'pg_ctl stop' EXIT

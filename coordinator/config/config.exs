@@ -7,19 +7,19 @@
 # General application configuration
 import Config
 
-config :siplane,
-  ecto_repos: [Siplane.Repo],
+config :treadmill,
+  ecto_repos: [Treadmill.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
 # Configures the endpoint
-config :siplane, SiplaneWeb.Endpoint,
+config :treadmill, TreadmillWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Phoenix.Endpoint.Cowboy2Adapter,
   render_errors: [
-    formats: [html: SiplaneWeb.ErrorHTML, json: SiplaneWeb.ErrorJSON],
+    formats: [html: TreadmillWeb.ErrorHTML, json: TreadmillWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Siplane.PubSub,
+  pubsub_server: Treadmill.PubSub,
   live_view: [signing_salt: "4V3bXGxi"]
 
 # Configures the mailer
@@ -29,7 +29,7 @@ config :siplane, SiplaneWeb.Endpoint,
 #
 # For production it's recommended to configure a different adapter
 # at the `config/runtime.exs`.
-config :siplane, Siplane.Mailer, adapter: Swoosh.Adapters.Local
+config :treadmill, Treadmill.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure esbuild (the version is required)
 config :esbuild,

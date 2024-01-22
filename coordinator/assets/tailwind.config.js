@@ -8,8 +8,8 @@ const path = require("path")
 module.exports = {
   content: [
     "./js/**/*.js",
-    "../lib/siplane_web.ex",
-    "../lib/siplane_web/**/*.*ex"
+    "../lib/treadmill_web.ex",
+    "../lib/treadmill_web/**/*.*ex"
   ],
   theme: {
     extend: {
