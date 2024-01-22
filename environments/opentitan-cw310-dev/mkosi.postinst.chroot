@@ -31,6 +31,7 @@ locale-gen en_US.UTF-8
 cd /root
 git clone https://github.com/lowRISC/opentitan
 cd /root/opentitan
+cp util/git/hooks/post-checkout .git/hooks/
 git checkout b610a0e126130b4d81d5961f81104313292542e1
 cd /
 
