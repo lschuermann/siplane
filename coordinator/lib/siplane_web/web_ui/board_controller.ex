@@ -141,14 +141,17 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
     # don't want to clear the contents:
     socket = assign(socket, create_job_form: to_form(params))
 
-    with {:ok, parsed_env_id} = UUID.info(environment_id_str),
+    with {:ok, parsed_env_id} <- UUID.info(environment_id_str),
          env_id = Keyword.get(parsed_env_id, :binary),
          ecto_env_id = Ecto.UUID.load!(env_id),
-	 true = Siplane.Repo.exists?(from(e in Siplane.Environment, where: e.id == ^ecto_env_id)) do
+	 true <- Siplane.Repo.exists?(from(e in Siplane.Environment, where: e.id == ^ecto_env_id)),
+         %Siplane.User{id: ecto_user_id} <- Map.get(socket.assigns, :user, nil), # If not logged in, socket.assigns == nil
+         {:ok, parsed_user_id} = UUID.info(ecto_user_id),
+         user_id = Keyword.get(parsed_user_id, :binary) do
 
       # Start job:
       job_label = if job_label != "", do: job_label, else: nil
-      {:ok, job} = Siplane.Job.instant_job(socket.assigns.board_id, env_id, job_label)
+      {:ok, job} = Siplane.Job.instant_job(socket.assigns.board_id, env_id, job_label, user_id)
 
       {
 	:noreply,
@@ -159,6 +162,10 @@ defmodule SiplaneWeb.WebUI.BoardController.Live do
     else
       {:error, _} ->
 	{:noreply, put_flash(socket, :error, "Select valid environment!")}
+      false ->
+	{:noreply, put_flash(socket, :error, "Select valid environment!")}
+      nil ->
+	{:noreply, put_flash(socket, :error, "Log in first!")}
     end
   end
 

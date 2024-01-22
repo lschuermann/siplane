@@ -28,8 +28,8 @@ defmodule Siplane.Board do
   def changeset(board, attrs) do
     # TODO: environments foreign key constraint?
     board
-    |> cast(attrs, [:label, :manufacturer, :model, :hwrev, :location, :runner_token])
-    |> validate_required([:label, :manufacturer, :model, :hwrev, :location, :runner_token])
+    |> cast(attrs, [:label, :manufacturer, :model, :hwrev, :location, :runner_token, :image_url])
+    |> validate_required([:label, :manufacturer, :model, :location, :runner_token])
   end
 
   # ----- Public-Facing API ----------------------------------------------------
@@ -130,7 +130,7 @@ defmodule Siplane.Board do
   # def update_job_state(board_id, job_id, state) do
   #   case Registry.lookup(__MODULE__.Server.Registry, board_id) do
   #     [{pid, _}] -> GenServer.call(pid, {:update_job_state, :job_id, state})
-  #     _ -> {:err, :board_server_not_found}
+  #     _ -> {:error, :board_server_not_found}
   #   end
   # end
 

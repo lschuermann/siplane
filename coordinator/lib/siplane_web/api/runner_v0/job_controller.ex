@@ -47,9 +47,14 @@ defmodule SiplaneWeb.API.Runner.V0.JobController do
       cast_func: &__MODULE__.cast_job_starting_stage/2
     ],
     status_message: [type: :string],
+    connection_info: [
+      type: :any, # TODO
+      required: false,
+    ],
     # TODO: connection_info!
   }
   def update_state(conn, params) do
+    IO.puts("Params: #{inspect params}, body params: #{inspect conn.body_params}")
     with {:ok, validated_job_id_params} <- Tarams.cast(params, @job_id_params_schema),
 	 {:ok, validated_body} <- Tarams.cast(conn.body_params, @update_state_body_schema) do
       # TODO: validate the board's authentication token!

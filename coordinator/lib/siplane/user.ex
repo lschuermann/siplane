@@ -26,6 +26,29 @@ defmodule Siplane.User do
   end
 end
 
+defmodule Siplane.UserSSHKey do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  def log_event(event) do
+    # nada
+  end
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+  schema "user_ssh_keys" do
+    field :enabled, :boolean
+    field :type, :string
+    field :binary_key, :binary
+    field :label, :string
+    field :github_ssh_key_id, :integer
+
+    timestamps(type: :utc_datetime)
+
+    belongs_to :user, Siplane.User
+  end
+end
+
 defmodule Siplane.User.UserProvider do
   use Ecto.Schema
   import Ecto.Changeset

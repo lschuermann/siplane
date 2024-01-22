@@ -33,7 +33,7 @@ defmodule Siplane.Job do
 
     belongs_to :board, Siplane.Board
     belongs_to :environment, Siplane.Board
-    has_one :creator, Siplane.User
+    belongs_to :creator, Siplane.User
   end
 
   @doc false
@@ -158,10 +158,37 @@ defmodule Siplane.Job do
       [] -> false
     end
   end
+  
+  def get_job_state(job_id) do
+    validate_job_id(job_id)
+    case Registry.lookup(__MODULE__.BoardRegistry, job_id) do
+      [{pid, _val}] -> GenServer.call(pid, {:get_job_state, job_id})
+      # TODO!
+      [] -> {:error, :job_not_active_todo_this_should_look_into_the_db}
+    end
+  end
 
-  def instant_job(board_id, environment_id, label \\ nil) do
+  def instant_job(board_id, environment_id, label \\ nil, creator \\ nil) do
     Siplane.Board.validate_board_id(board_id)
     # TODO: validate environment ID
+
+    creator =
+      if !is_nil(creator) do
+        Ecto.UUID.load!(creator)
+      else
+        nil
+      end
+
+    IO.inspect(
+      %Siplane.Job{
+	start: DateTime.truncate(DateTime.utc_now(), :second),
+	dispatched: false,
+	board_id: Ecto.UUID.load!(board_id),
+	environment_id: Ecto.UUID.load!(environment_id),
+	label: label,
+        creator_id: creator,
+      }
+    )
 
     job = Siplane.Repo.insert!(
       %Siplane.Job{
@@ -170,6 +197,7 @@ defmodule Siplane.Job do
 	board_id: Ecto.UUID.load!(board_id),
 	environment_id: Ecto.UUID.load!(environment_id),
 	label: label,
+        creator_id: creator,
       }
     )
 
@@ -182,7 +210,7 @@ defmodule Siplane.Job do
     validate_job_id(job_id)
     case Registry.lookup(__MODULE__.BoardRegistry, job_id) do
       [{pid, _val}] -> GenServer.call(pid, {:terminate_job, job_id})
-      [] -> {:err, :job_not_active}
+      [] -> {:error, :job_not_active}
     end
   end
 
@@ -224,12 +252,11 @@ defmodule Siplane.Job do
     validate_job_id(job_id)
     case Registry.lookup(__MODULE__.BoardRegistry, job_id) do
       [{pid, _val}] -> GenServer.call(pid, {:update_job_state, job_id, state})
-      [] -> {:err, :job_not_found}
+      [] -> {:error, :job_not_found}
     end
   end
 
   def put_console_log(job_id, _offset, _next, log) do
-    IO.puts("Console log: #{log}")
     validate_job_id(job_id)
     Registry.dispatch(__MODULE__.SubscriberRegistry, job_id, fn subscribers ->
       for {pid, _} <- subscribers, do: send(pid, {:job_event, job_id, :console_log_event, log})

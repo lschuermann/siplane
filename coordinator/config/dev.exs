@@ -89,6 +89,7 @@ config :ueberauth, Ueberauth,
   providers: [
     github: {Ueberauth.Strategy.Github, [default_scope: "user:email,read:public_key"]}
   ]
+
 config :ueberauth, Ueberauth.Strategy.Github.OAuth,
-  client_id: "ddd1fb378652256efedc",
-  client_secret: "53b59c29213c554ad1bfef60fbf2c1c5ac893e05"
+  client_id: System.get_env("GITHUB_OAUTH_CLIENT_ID"),
+  client_secret: System.get_env("GITHUB_OAUTH_CLIENT_SECRET")

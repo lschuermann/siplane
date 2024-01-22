@@ -27,6 +27,7 @@ defmodule SiplaneWeb.WebUI.JobController.Live do
 	  )
 	  |> Siplane.Repo.preload(:board)
 	))
+      |> assign(job_state: Siplane.Job.get_job_state(socket.assigns.job_id))
   end
 
   @impl true

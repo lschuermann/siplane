@@ -108,7 +108,7 @@ defmodule Siplane.Repo.Migrations.Init do
     create table(:jobs, primary_key: false) do
       add :id, :binary_id, primary_key: true, null: false
       add :label, :string
-      add :creator, references(:users, type: :binary_id)
+      add :creator_id, references(:users, type: :binary_id)
 
       add :start, :utc_datetime, null: false
       # Jobs may not have a defined end, in which case the earliest
