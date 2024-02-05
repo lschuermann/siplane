@@ -314,13 +314,7 @@ enum ConsoleStreamerCommand {
 
 #[async_trait]
 impl connector::Runner for NspawnRunner {
-    async fn start_job(
-        this: &Arc<Self>,
-        job_id: Uuid,
-        environment_id: Uuid,
-        ssh_keys: Vec<String>,
-        ssh_rendezvous_servers: Vec<sse_api::RendezvousServerSpec>,
-    ) {
+    async fn start_job(this: &Arc<Self>, msg: sse_api::StartJobMessage) {
         // This method must not block for long periods of time. We're provided
         // an &Arc<Self> to be able to launch async tasks, while returning
         // immediately. For now, we assume that all actions performed here are
@@ -337,11 +331,11 @@ impl connector::Runner for NspawnRunner {
         {
             this.connector
                 .post_job_state(
-                    job_id,
+                    msg.job_id,
                     rest_api::JobState::Failed {
                         status_message: Some(format!(
                             "Cannot start job {:?} on board {:?}, still executing job {:?}",
-                            job_id, this.config.board_id, running_job_id
+                            msg.job_id, this.config.board_id, running_job_id
                         )),
                     },
                 )
@@ -351,28 +345,29 @@ impl connector::Runner for NspawnRunner {
 
         // Try to get a hold of the requested job environment. Error out if the
         // environment can't be found:
-        let environment_cfg = if let Some(env_cfg) = this.config.environments.get(&environment_id) {
-            env_cfg
-        } else {
-            this.connector
-                .post_job_state(
-                    job_id,
-                    rest_api::JobState::Failed {
-                        status_message: Some(format!(
-                            "Cannot start job {:?} on board {:?}, unknown environment {:?}",
-                            job_id, this.config.board_id, environment_id
-                        )),
-                    },
-                )
-                .await;
-            return;
-        };
+        let environment_cfg =
+            if let Some(env_cfg) = this.config.environments.get(&msg.environment_id) {
+                env_cfg
+            } else {
+                this.connector
+                    .post_job_state(
+                        msg.job_id,
+                        rest_api::JobState::Failed {
+                            status_message: Some(format!(
+                                "Cannot start job {:?} on board {:?}, unknown environment {:?}",
+                                msg.job_id, this.config.board_id, msg.environment_id
+                            )),
+                        },
+                    )
+                    .await;
+                return;
+            };
 
         // We're not executing any job and acquired the lock, begin allocating
         // the root file system (volume):
         this.connector
             .post_job_state(
-                job_id,
+                msg.job_id,
                 rest_api::JobState::Starting {
                     stage: rest_api::JobStartingStage::Allocating,
                     status_message: None,
@@ -383,24 +378,24 @@ impl connector::Runner for NspawnRunner {
         // Dispatch to the methods for allocating the root file system:
         let root_fs_res: Result<(PathBuf, Option<String>), String> =
             if let Some(zfs_root_cfg) = &environment_cfg.zfsroot {
-                this.allocate_zfs_root(job_id, environment_id, zfs_root_cfg)
+                this.allocate_zfs_root(msg.job_id, msg.environment_id, zfs_root_cfg)
                     .await
                     .map(|(mountpoint, zfs_root_fs)| (mountpoint, Some(zfs_root_fs)))
             } else {
                 Err(format!(
                     "Cannot start job {:?} on board {:?}, no root filesystem provider found.",
-                    job_id, this.config.board_id,
+                    msg.job_id, this.config.board_id,
                 ))
             };
 
         let (root_fs_mountpoint, zfs_root_fs) = match root_fs_res {
             Ok(t) => t,
-            Err(msg) => {
+            Err(emsg) => {
                 this.connector
                     .post_job_state(
-                        job_id,
+                        msg.job_id,
                         rest_api::JobState::Failed {
-                            status_message: Some(msg),
+                            status_message: Some(emsg),
                         },
                     )
                     .await;
@@ -422,7 +417,7 @@ impl connector::Runner for NspawnRunner {
 
         // Start the control socket handler and create a new UNIX SeqPacket socket:
         let control_socket = UnixSeqpacketControlSocket::new_unix_seqpacket(
-            job_id,
+            msg.job_id,
             &control_socket_path_abs,
             this.clone(),
         )
@@ -465,15 +460,15 @@ impl connector::Runner for NspawnRunner {
             _ => None,
         };
 
-        let mut ssh_rendezvous_proxies = Vec::with_capacity(ssh_rendezvous_servers.len());
+        let mut ssh_rendezvous_proxies = Vec::with_capacity(msg.ssh_rendezvous_servers.len());
         if let Some(sa) = ssh_socket_addr {
-            for server_spec in ssh_rendezvous_servers {
+            for server_spec in &msg.ssh_rendezvous_servers {
                 ssh_rendezvous_proxies.push(
                     rendezvous_proxy::RendezvousProxy::start(
-                        server_spec.client_id,
-                        server_spec.server_base_url,
+                        server_spec.client_id.clone(),
+                        server_spec.server_base_url.clone(),
                         sa,
-                        server_spec.auth_token,
+                        server_spec.auth_token.clone(),
                         Duration::from_secs(60),
                         Duration::from_secs(10),
                     )
@@ -485,7 +480,7 @@ impl connector::Runner for NspawnRunner {
         // All resources have been allocated, mark the container as booting:
         this.connector
             .post_job_state(
-                job_id,
+                msg.job_id,
                 rest_api::JobState::Starting {
                     stage: rest_api::JobStartingStage::Booting,
                     status_message: None,
@@ -614,7 +609,7 @@ impl connector::Runner for NspawnRunner {
                 // TODO: cleanup root file system!
                 this.connector
                     .post_job_state(
-                        job_id,
+                        msg.job_id,
                         rest_api::JobState::Failed {
                             status_message: Some(format!("Failed to spawn container: {:?}", e,)),
                         },
@@ -638,11 +633,14 @@ impl connector::Runner for NspawnRunner {
         let child = Arc::new(Mutex::new(child));
 
         let this_streamer = this.clone();
+        let msg_streamer = msg.clone();
         let (streamer_chan_tx, mut streamer_chan_rx) = tokio::sync::mpsc::channel(1);
         let streamer_child = child.clone();
         let console_streamer = tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
+
             let this = this_streamer;
+            let msg = msg_streamer;
 
             // Create BufReaders from the file descriptors for streaming:
             let mut stdout_reader = tokio::io::BufReader::with_capacity(64 * 1024, stdout);
@@ -724,7 +722,7 @@ impl connector::Runner for NspawnRunner {
 
                         this.connector
                             .send_job_console_log(
-                                job_id,
+                                msg.job_id,
                                 console_queue_offset,
                                 console_queue_offset + 1,
                                 &[(*stdio_fd, buf.len())],
@@ -784,7 +782,11 @@ impl connector::Runner for NspawnRunner {
                             // this task's join.
                             let stop_this = this.clone();
                             tokio::spawn(async move {
-                                NspawnRunner::stop_job(&stop_this, job_id).await;
+                                NspawnRunner::stop_job(
+                                    &stop_this,
+                                    sse_api::StopJobMessage { job_id: msg.job_id },
+                                )
+                                .await;
                             });
 
                             // Don't break out of the loop -- we still expect
@@ -823,7 +825,7 @@ impl connector::Runner for NspawnRunner {
 
         this.connector
             .post_job_state(
-                job_id,
+                msg.job_id,
                 rest_api::JobState::Ready {
                     connection_info: rendezvous_proxy_addrs,
                     status_message: None,
@@ -832,10 +834,10 @@ impl connector::Runner for NspawnRunner {
             .await;
 
         *current_job_lg = Some(NspawnRunnerJob {
-            job_id,
-            _environment_id: environment_id,
+            job_id: msg.job_id,
+            _environment_id: msg.environment_id,
             environment_config: environment_cfg.clone(),
-            ssh_keys,
+            ssh_keys: msg.ssh_keys,
             nspawn_proc: child,
             console_streamer_handle: console_streamer,
             console_streamer_cmd_chan: streamer_chan_tx,
@@ -846,7 +848,7 @@ impl connector::Runner for NspawnRunner {
         });
     }
 
-    async fn stop_job(this: &Arc<Self>, job_id: Uuid) {
+    async fn stop_job(this: &Arc<Self>, msg: sse_api::StopJobMessage) {
         // This method must not block for long periods of time. We're provided
         // an &Arc<Self> to be able to launch async tasks, while returning
         // immediately. For now, we assume that all actions performed here are
@@ -860,14 +862,14 @@ impl connector::Runner for NspawnRunner {
         let mut current_job_lg = this.current_job.lock().await;
         match *current_job_lg {
             Some(ref job) => {
-                if job.job_id != job_id {
+                if job.job_id != msg.job_id {
                     this.connector
                         .post_job_state(
-                            job_id,
+                            msg.job_id,
                             rest_api::JobState::Failed {
                                 status_message: Some(format!(
                                     "Cannot stop job {:?} on board {:?}, not running!",
-                                    job_id, this.config.board_id,
+                                    msg.job_id, this.config.board_id,
                                 )),
                             },
                         )
@@ -879,11 +881,11 @@ impl connector::Runner for NspawnRunner {
             None => {
                 this.connector
                     .post_job_state(
-                        job_id,
+                        msg.job_id,
                         rest_api::JobState::Failed {
                             status_message: Some(format!(
                                 "Cannot stop job {:?} on board {:?}, not running!",
-                                job_id, this.config.board_id,
+                                msg.job_id, this.config.board_id,
                             )),
                         },
                     )
@@ -899,7 +901,7 @@ impl connector::Runner for NspawnRunner {
         // Transition into the shutdown state:
         this.connector
             .post_job_state(
-                job_id,
+                msg.job_id,
                 rest_api::JobState::Stopping {
                     status_message: None,
                 },
@@ -983,7 +985,7 @@ impl connector::Runner for NspawnRunner {
                     if !status.success() {
                         this.connector
                             .post_job_state(
-                                job_id,
+                                msg.job_id,
                                 rest_api::JobState::Failed {
                                     status_message: Some(format!(
                                         "Unmounting root filesystem failed with exit-status \
@@ -1001,7 +1003,7 @@ impl connector::Runner for NspawnRunner {
                 Err(e) => {
                     this.connector
                         .post_job_state(
-                            job_id,
+                            msg.job_id,
                             rest_api::JobState::Failed {
                                 status_message: Some(format!(
                                     "Unmounting root filesystem failed with error: {:?}",
@@ -1017,12 +1019,12 @@ impl connector::Runner for NspawnRunner {
 
         // If we've created a ZFS file system for this container, destroy it:
         if let Some(zfs_fs) = job.zfs_root_fs {
-            if let Err(msg) = this.destroy_zfs_root(&zfs_fs).await {
+            if let Err(emsg) = this.destroy_zfs_root(&zfs_fs).await {
                 this.connector
                     .post_job_state(
-                        job_id,
+                        msg.job_id,
                         rest_api::JobState::Failed {
-                            status_message: Some(msg),
+                            status_message: Some(emsg),
                         },
                     )
                     .await;
@@ -1037,7 +1039,7 @@ impl connector::Runner for NspawnRunner {
         // Mark job as finished:
         this.connector
             .post_job_state(
-                job_id,
+                msg.job_id,
                 rest_api::JobState::Finished {
                     status_message: None,
                 },

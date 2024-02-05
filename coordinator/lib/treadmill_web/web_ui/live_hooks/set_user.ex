@@ -1,6 +1,5 @@
 defmodule TreadmillWeb.WebUI.LiveHooks.SetUser do
   import Phoenix.Component
-  import Phoenix.LiveView
 
   alias Treadmill.Repo
   alias Treadmill.User

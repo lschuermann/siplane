@@ -26,8 +26,34 @@ defmodule TreadmillWeb.WebUI.JobController.Live do
 	    from j in Treadmill.Job, where: j.id == ^ecto_job_id
 	  )
 	  |> Treadmill.Repo.preload(:board)
-	))
+	)
+      )
       |> assign(job_state: Treadmill.Job.get_job_state(socket.assigns.job_id))
+
+    # Load job parameters. These are only set on job creation and thus
+    # should be immutable. Load them only once.
+    socket =
+      if not Map.has_key?(socket.assigns, :job_parameters) do
+	job_preloaded =
+	  socket.assigns.job
+	  |> Treadmill.Repo.preload([
+	    :parameters,
+  	    {:board, :parameters},
+	    {:environment, :parameters},
+          ])
+	board_env_params =
+	  Treadmill.Job.board_environment_parameters(job_preloaded)
+
+	socket
+	|> assign(job_parameters: job_preloaded.parameters)
+	|> assign(board_parameters: job_preloaded.board.parameters)
+	|> assign(environment_parameters: job_preloaded.environment.parameters)
+	|> assign(board_environment_parameters: board_env_params)
+      else
+	socket
+      end
+
+    socket
   end
 
   @impl true
@@ -62,6 +88,7 @@ defmodule TreadmillWeb.WebUI.JobController.Live do
 	    log_events: Treadmill.Job.job_log(job_id),
 	    # Fetch initial console log
 	    console_log: "",
+	    job_action_form: to_form(%{})
 	  ),
 	}
     end
@@ -87,7 +114,8 @@ defmodule TreadmillWeb.WebUI.JobController.Live do
   end
 
   @impl true
-  def handle_event("terminate_job", _params, socket) do
+  def handle_event("job_action", _params, socket) do
+    # Currently only the terminate action supported.
     Treadmill.Job.terminate_job socket.assigns.job_id
     { :noreply, socket }
   end

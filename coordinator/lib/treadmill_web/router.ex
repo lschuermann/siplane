@@ -25,7 +25,7 @@ defmodule TreadmillWeb.Router do
 
 
     get "/", WebUI.PageController, :home
-    resources "/boards", WebUI.BoardController, only: [:index, :show]
+    resources "/boards", WebUI.BoardController, only: [:index]
     get "/user", WebUI.UserController, :index
   end
 

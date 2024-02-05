@@ -9,6 +9,7 @@ mkShell {
     less
     glibcLocales
     elixir
+    inotify-tools
   ];
 
   postgresConf =

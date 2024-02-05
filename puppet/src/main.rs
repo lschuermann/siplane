@@ -4,30 +4,35 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use bytes::{BufMut, Bytes, BytesMut};
+use clap::{Parser, ValueEnum};
 use log::{debug, error, info, warn};
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_seqpacket::UnixSeqpacket;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use treadmill_rs::api::runner_puppet::{
     NetworkConfig, PuppetEvent, PuppetMsg, PuppetReq, RunnerMsg, RunnerResp,
 };
 
-enum RunnerSocketClientTaskCmd {
+enum UnixSeqpacketControlSocketClientTaskCmd {
     Shutdown,
 }
 
-struct RunnerSocketClient {
+struct UnixSeqpacketControlSocketClient {
     socket: Arc<UnixSeqpacket>,
     puppet_event_cnt: Mutex<u64>,
     request_responses: Arc<Mutex<(u64, HashMap<u64, Option<RunnerResp>>)>>,
-    task_cmd_tx: tokio::sync::mpsc::Sender<RunnerSocketClientTaskCmd>,
+    task_cmd_tx: tokio::sync::mpsc::Sender<UnixSeqpacketControlSocketClientTaskCmd>,
     task_notify: Arc<tokio::sync::Notify>,
     task_join_handle: tokio::task::JoinHandle<()>,
 }
 
-impl RunnerSocketClient {
-    async fn new<P: AsRef<Path>>(unix_seqpacket_control_socket: P) -> Result<RunnerSocketClient> {
+impl UnixSeqpacketControlSocketClient {
+    async fn new<P: AsRef<Path>>(
+        unix_seqpacket_control_socket: P,
+    ) -> Result<UnixSeqpacketControlSocketClient> {
         let socket = Arc::new(
             UnixSeqpacket::connect(&unix_seqpacket_control_socket)
                 .await
@@ -57,7 +62,7 @@ impl RunnerSocketClient {
             .await
         });
 
-        Ok(RunnerSocketClient {
+        Ok(UnixSeqpacketControlSocketClient {
             socket,
             puppet_event_cnt: Mutex::new(0),
             request_responses,
@@ -70,7 +75,7 @@ impl RunnerSocketClient {
     pub async fn shutdown(self) {
         info!("Requesting runner socket client to shut down...");
         self.task_cmd_tx
-            .send(RunnerSocketClientTaskCmd::Shutdown)
+            .send(UnixSeqpacketControlSocketClientTaskCmd::Shutdown)
             .await
             .expect("Runner socket client task has quit before receiving shutdown signal!");
         self.task_join_handle.await.unwrap();
@@ -79,7 +84,7 @@ impl RunnerSocketClient {
     async fn task(
         socket: Arc<UnixSeqpacket>,
         request_responses: Arc<Mutex<(u64, HashMap<u64, Option<RunnerResp>>)>>,
-        mut cmd_rx: tokio::sync::mpsc::Receiver<RunnerSocketClientTaskCmd>,
+        mut cmd_rx: tokio::sync::mpsc::Receiver<UnixSeqpacketControlSocketClientTaskCmd>,
         notify: Arc<tokio::sync::Notify>,
     ) {
         let mut recv_buf = vec![0; 1024 * 1024];
@@ -92,7 +97,7 @@ impl RunnerSocketClient {
                     panic!("Task command channel TX dropped before shutdown!");
                 },
 
-                Some(RunnerSocketClientTaskCmd::Shutdown) => {
+                Some(UnixSeqpacketControlSocketClientTaskCmd::Shutdown) => {
                     debug!("Shutting down runner socket client");
                     break;
                 },
@@ -218,6 +223,262 @@ impl RunnerSocketClient {
             .await
             .unwrap();
     }
+}
+
+enum TcpControlSocketClientTaskCmd {
+    SendMessage(Bytes),
+    Shutdown,
+}
+
+struct TcpControlSocketClient {
+    puppet_event_cnt: Mutex<u64>,
+    request_responses: Arc<Mutex<(u64, HashMap<u64, Option<RunnerResp>>)>>,
+    task_cmd_tx: tokio::sync::mpsc::Sender<TcpControlSocketClientTaskCmd>,
+    task_notify: Arc<tokio::sync::Notify>,
+    task_join_handle: tokio::task::JoinHandle<()>,
+}
+
+impl TcpControlSocketClient {
+    async fn new(addr: std::net::SocketAddr) -> Result<TcpControlSocketClient> {
+        let socket = TcpStream::connect(addr)
+            .await
+            .with_context(|| format!("Opening TCP control socket connection at {:?}", addr,))?;
+
+        let request_responses = Arc::new(Mutex::new((0, HashMap::new())));
+
+        let task_request_responses = request_responses.clone();
+        let task_notify = Arc::new(tokio::sync::Notify::new());
+        let task_notify_task = task_notify.clone();
+        let (task_cmd_tx, task_cmd_rx) = tokio::sync::mpsc::channel(1);
+
+        let task_join_handle = tokio::spawn(async move {
+            Self::task(
+                socket,
+                task_request_responses,
+                task_cmd_rx,
+                task_notify_task,
+            )
+            .await
+        });
+
+        Ok(TcpControlSocketClient {
+            puppet_event_cnt: Mutex::new(0),
+            request_responses,
+            task_cmd_tx,
+            task_notify,
+            task_join_handle,
+        })
+    }
+
+    pub async fn shutdown(self) {
+        info!("Requesting runner socket client to shut down...");
+        self.task_cmd_tx
+            .send(TcpControlSocketClientTaskCmd::Shutdown)
+            .await
+            .expect("Runner socket client task has quit before receiving shutdown signal!");
+        self.task_join_handle.await.unwrap();
+    }
+
+    async fn task(
+        socket: TcpStream,
+        request_responses: Arc<Mutex<(u64, HashMap<u64, Option<RunnerResp>>)>>,
+        mut cmd_rx: tokio::sync::mpsc::Receiver<TcpControlSocketClientTaskCmd>,
+        notify: Arc<tokio::sync::Notify>,
+    ) {
+        use futures::SinkExt;
+        use tokio_stream::StreamExt;
+
+        let mut transport = Framed::new(socket, LengthDelimitedCodec::new());
+
+        loop {
+            #[rustfmt::skip]
+            tokio::select! {
+		cmd_res = cmd_rx.recv() => {
+                    match cmd_res {
+			None => {
+			    panic!("Task command channel TX dropped before shutdown!");
+			},
+
+			Some(TcpControlSocketClientTaskCmd::Shutdown) => {
+			    debug!("Shutting down runner socket client");
+			    break;
+			},
+
+			Some(TcpControlSocketClientTaskCmd::SendMessage(bytes)) => {
+			    match transport.send(bytes).await {
+				Ok(()) => (),
+				Err(e) => {
+				    error!("Error sending message to runner: {:?}", e);
+				}
+			    }
+			},
+                    }
+		}
+
+		recv_res = transport.next() => {
+                    let bytes = match recv_res {
+			Some(Err(e)) => {
+			    // maybe this contains end of stream?
+			    error!("Failed to receive runner message: {:?}", e);
+			    continue;
+			}
+			Some(Ok(b)) => b,
+			None => {
+			    // TODO: this is likely end of stream?
+			    error!("Failed to receive runner message: None");
+			    continue;
+			}
+                    };
+
+                    match serde_json::from_slice(&bytes) {
+			Ok(RunnerMsg::Response {
+			    request_id,
+			    response,
+			}) => {
+			    let resp_map = &mut request_responses.lock().await.1;
+			    if let Some(entry) = resp_map.get_mut(&request_id) {
+				if entry.is_some() {
+				    error!("Received spurious response for request ID {}: {:?}",
+					   request_id, response);
+				}
+				*entry = Some(response);
+				notify.notify_waiters();
+			    } else {
+				error!("Received response for unexpected request ID {}: {:?}",
+				       request_id, response);
+			    }
+			},
+
+			Ok(RunnerMsg::Event {
+			    runner_event_id,
+			    event,
+			}) => {
+			    warn!("Received unhandled runner event with id {}: {:?}",
+				  runner_event_id, event);
+			}
+
+			Ok(RunnerMsg::Error {
+			    message,
+			}) => {
+			    warn!("Received error message from runner: {:?}", message);
+			}
+
+			Err(e) => {
+			    panic!("Couldn't parse runner message: {:?}", e);
+			}
+                    }
+		}
+            }
+        }
+    }
+
+    async fn request(&self, req: PuppetReq) -> RunnerResp {
+        let request_id = {
+            // Acquire request ID:
+            let mut request_responses_lg = self.request_responses.lock().await;
+
+            let request_id = request_responses_lg.0;
+            request_responses_lg.0 = request_responses_lg
+                .0
+                .checked_add(1)
+                .expect("Request counter overflow!");
+
+            // Insert dummy value, to indicate that we're actually waiting on this
+            // request. This helps debug cases where the runner sends a response to
+            // an invalid request ID or a request that is no longer current:
+            assert!(request_responses_lg.1.insert(request_id, None).is_none());
+
+            request_id
+        };
+
+        // Ask the async task to send the request:
+        let mut bytes = BytesMut::new().writer();
+        serde_json::to_writer(
+            &mut bytes,
+            &PuppetMsg::Request {
+                request_id,
+                request: req,
+            },
+        )
+        .expect("Failed to encode control socket request as JSON");
+        self.task_cmd_tx
+            .send(TcpControlSocketClientTaskCmd::SendMessage(
+                bytes.into_inner().freeze(),
+            ))
+            .await
+            .expect("Runner socket client task is no longer alive!");
+
+        // Re-acquire the lock:
+        let mut request_responses_lg = self.request_responses.lock().await;
+
+        // Now, while we're hold the lock guard, request a notification, but
+        // only await it after releasing the lock to avoid a deadlock:
+        while request_responses_lg.1.get(&request_id).unwrap().is_none() {
+            let fut = self.task_notify.notified();
+            std::mem::drop(request_responses_lg);
+            fut.await;
+            request_responses_lg = self.request_responses.lock().await;
+        }
+
+        // We have a response, extract and return it:
+        request_responses_lg.1.remove(&request_id).unwrap().unwrap()
+    }
+
+    async fn send_event(&self, ev: PuppetEvent) {
+        let event_id = {
+            let mut puppet_event_cnt = self.puppet_event_cnt.lock().await;
+            let event_id = *puppet_event_cnt;
+            *puppet_event_cnt = puppet_event_cnt
+                .checked_add(1)
+                .expect("Puppet event ID overflow!");
+            event_id
+        };
+
+        // Ask the async task to send the event:
+        let mut bytes = BytesMut::new().writer();
+        serde_json::to_writer(
+            &mut bytes,
+            &PuppetMsg::Event {
+                puppet_event_id: event_id,
+                event: ev,
+            },
+        )
+        .expect("Failed to encode control socket event as JSON");
+        self.task_cmd_tx
+            .send(TcpControlSocketClientTaskCmd::SendMessage(
+                bytes.into_inner().freeze(),
+            ))
+            .await
+            .expect("Runner socket client task is no longer alive!");
+    }
+}
+
+enum ControlSocketClient {
+    UnixSeqpacket(UnixSeqpacketControlSocketClient),
+    Tcp(TcpControlSocketClient),
+}
+
+impl ControlSocketClient {
+    async fn request(&self, req: PuppetReq) -> RunnerResp {
+        match self {
+            ControlSocketClient::UnixSeqpacket(client) => client.request(req).await,
+            ControlSocketClient::Tcp(client) => client.request(req).await,
+        }
+    }
+
+    async fn send_event(&self, ev: PuppetEvent) {
+        match self {
+            ControlSocketClient::UnixSeqpacket(client) => client.send_event(ev).await,
+            ControlSocketClient::Tcp(client) => client.send_event(ev).await,
+        }
+    }
+
+    pub async fn shutdown(self) {
+        match self {
+            ControlSocketClient::UnixSeqpacket(client) => client.shutdown().await,
+            ControlSocketClient::Tcp(client) => client.shutdown().await,
+        }
+    }
 
     pub async fn get_ssh_keys(&self) -> Vec<String> {
         let resp = self.request(PuppetReq::SSHKeys).await;
@@ -247,13 +508,26 @@ impl RunnerSocketClient {
     }
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+#[clap(rename_all = "snake_case")]
+enum PuppetControlSocketTransport {
+    UnixSeqpacket,
+    Tcp,
+}
+
 #[derive(Debug, Clone, Parser)]
 struct PuppetArgs {
-    #[arg(long, short = 's')]
-    unix_seqpacket_control_socket: PathBuf,
+    #[arg(long, short = 't')]
+    transport: PuppetControlSocketTransport,
+
+    #[arg(long, required_if_eq("transport", "unix_seqpacket"))]
+    unix_seqpacket_control_socket: Option<PathBuf>,
+
+    #[arg(long, required_if_eq("transport", "tcp"))]
+    tcp_control_socket_addr: Option<std::net::SocketAddr>,
 
     #[arg(long)]
-    authorized_keys_file: PathBuf,
+    authorized_keys_file: Option<PathBuf>,
 
     #[arg(long)]
     network_config_script: Option<PathBuf>,
@@ -274,19 +548,30 @@ async fn main() -> Result<()> {
 
     let args = PuppetArgs::parse();
 
-    let client = RunnerSocketClient::new(&args.unix_seqpacket_control_socket).await?;
+    let client = match args.transport {
+        PuppetControlSocketTransport::UnixSeqpacket => ControlSocketClient::UnixSeqpacket(
+            UnixSeqpacketControlSocketClient::new(&args.unix_seqpacket_control_socket.unwrap())
+                .await?,
+        ),
 
-    // Request the SSH keys:
-    let ssh_keys = client.get_ssh_keys().await;
+        PuppetControlSocketTransport::Tcp => ControlSocketClient::Tcp(
+            TcpControlSocketClient::new(args.tcp_control_socket_addr.unwrap()).await?,
+        ),
+    };
 
-    // Create the authorized keys file's parent directories (if they
-    // don't exist) and dump the keys to the file:
-    tokio::fs::create_dir_all(args.authorized_keys_file.parent().unwrap())
-        .await
-        .unwrap();
-    tokio::fs::write(&args.authorized_keys_file, ssh_keys.join("\n").as_bytes())
-        .await
-        .unwrap();
+    if let Some(ref authorized_keys_file) = args.authorized_keys_file {
+        // Request the SSH keys:
+        let ssh_keys = client.get_ssh_keys().await;
+
+        // Create the authorized keys file's parent directories (if they
+        // don't exist) and dump the keys to the file:
+        tokio::fs::create_dir_all(authorized_keys_file.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(authorized_keys_file, ssh_keys.join("\n").as_bytes())
+            .await
+            .unwrap();
+    }
 
     // Request the network configuration, dump it into environment variables and
     // pass it onto the network configuration script, if one is provided:

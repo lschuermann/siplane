@@ -1,6 +1,5 @@
 defmodule TreadmillWeb.WebUI.AuthController do
   use TreadmillWeb, :controller
-  import Ecto.Query
 
   # Important to use the :github_custom provider here, as it avoids catching the
   # /auth/github request and allows us to use a custom request handler that also
@@ -62,7 +61,7 @@ defmodule TreadmillWeb.WebUI.AuthController do
   end
 
   # Callback for the Uberauth SSO flows
-  def callback(conn, %{"provider" => "github"} = params) do
+  def callback(conn, %{"provider" => "github"} = _params) do
     # user_data = %{token: auth.credentials.token, email: auth.info.email, provider: "github"}
     %{assigns: %{ueberauth_auth: auth}} =
       conn

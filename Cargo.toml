@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "treadmill-rs",
     "nspawn-runner",
+    "netboot-runner",
     "puppet",
     "sse-connector",
     "unix-seqpacket-control-socket",
+    "tcp-control-socket",
     "rendezvous-server",
     "rendezvous-proxy",
 ]

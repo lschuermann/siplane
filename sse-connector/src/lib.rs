@@ -45,24 +45,12 @@ impl<R: Runner> SSERunnerConnector<R> {
                         // runner.send_state_update().await;
                     }
 
-                    Ok(SSEMessage::StartJob {
-                        job_id,
-                        environment_id,
-                        ssh_keys,
-                        ssh_rendezvous_servers,
-                    }) => {
-                        R::start_job(
-                            runner,
-                            job_id,
-                            environment_id,
-                            ssh_keys,
-                            ssh_rendezvous_servers,
-                        )
-                        .await;
+                    Ok(SSEMessage::StartJob(msg)) => {
+                        R::start_job(runner, msg).await;
                     }
 
-                    Ok(SSEMessage::StopJob { job_id }) => {
-                        R::stop_job(runner, job_id).await;
+                    Ok(SSEMessage::StopJob(msg)) => {
+                        R::stop_job(runner, msg).await;
                     }
 
                     Err(e) => {

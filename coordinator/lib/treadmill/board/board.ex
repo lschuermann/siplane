@@ -22,6 +22,7 @@ defmodule Treadmill.Board do
     many_to_many :environments, Treadmill.Environment,
       join_through: Treadmill.BoardEnvironment
     has_many :jobs, Treadmill.Job
+    has_many :parameters, Treadmill.Board.Parameter
   end
 
   @doc false

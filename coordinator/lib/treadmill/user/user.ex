@@ -2,7 +2,7 @@ defmodule Treadmill.User do
   use Ecto.Schema
   import Ecto.Changeset
 
-  def log_event(event) do
+  def log_event(_event) do
     # nada
   end
 
@@ -30,7 +30,7 @@ defmodule Treadmill.UserSSHKey do
   use Ecto.Schema
   import Ecto.Changeset
 
-  def log_event(event) do
+  def log_event(_event) do
     # nada
   end
 
@@ -84,7 +84,6 @@ end
 
 defmodule Treadmill.User.LogEvent do
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key false
   @foreign_key_type :binary_id

@@ -5,14 +5,8 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait Runner: Send + Sync + 'static {
-    async fn start_job(
-        this: &Arc<Self>,
-        job_id: Uuid,
-        environment_id: Uuid,
-        ssh_keys: Vec<String>,
-        ssh_rendezvous_servers: Vec<sse::RendezvousServerSpec>,
-    );
-    async fn stop_job(this: &Arc<Self>, job_id: Uuid);
+    async fn start_job(this: &Arc<Self>, msg: sse::StartJobMessage);
+    async fn stop_job(this: &Arc<Self>, msg: sse::StopJobMessage);
 }
 
 #[async_trait]

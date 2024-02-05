@@ -1,0 +1,20 @@
+coordinator_base_url = "http://localhost:4000"
+board_id = "aa82c109-bc3f-4a8a-b030-6a59059ac8ed"
+keepalive_timeout = 60
+reconnect_wait = 10
+
+[environments.870de506-3631-4351-8b78-c914982d5728]
+shutdown_timeout = 30
+
+target_address_v4 = "172.17.192.9"
+# target_address_v6 = ""
+
+ssh_port = 22
+ssh_preferred_ip_version = "v4"
+
+reset_script = ""
+start_script = ""
+stop_script = ""
+
+tcp_control_socket_addr = "0.0.0.0:7890"
+

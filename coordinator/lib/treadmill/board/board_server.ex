@@ -104,6 +104,17 @@ defmodule Treadmill.Board.Server do
     state
   end
 
+  # For all parameters (regardless of their source), we only pass through the
+  # key, value, and secret attributes to runners. This method converts a list of
+  # parameters loaded from the database into a Map exposed to runners.
+  defp transform_params(database_params) do
+    param_filter = fn p -> {p.key, %{ value: p.value, secret: p.secret }} end
+
+    database_params
+    |> Enum.map(param_filter)
+    |> Enum.into(%{})
+  end
+
   # This assumes that we have an established runner connection:
   defp schedule_jobs(state) do
     if map_size(state.active_jobs) < state.max_jobs do
@@ -113,6 +124,19 @@ defmodule Treadmill.Board.Server do
 	[job] ->
 	  job_id = UUID.string_to_binary!(job.id)
 
+	  job =
+	    job |> Treadmill.Repo.preload([
+	      :parameters,
+	      {:board, :parameters},
+	      {:environment, :parameters},
+	    ])
+
+	  # Ecto doesn't support composite key associations, so fetch
+	  # the Board.EnvironmentParameters separately:
+	  board_env_params = Treadmill.Job.board_environment_parameters(job)
+
+	  # Query the database for the creator's SSH keys
+
 	  # Register as the board server for this job:
 	  {:ok, _} = Registry.register(Treadmill.Job.BoardRegistry, job_id, nil)
 
@@ -121,8 +145,6 @@ defmodule Treadmill.Board.Server do
 	  # process crash:
 	  Treadmill.Repo.update!(Treadmill.Job.changeset(job, %{ dispatched: true }))
 
-          # Query the database for the creator's SSH keys
-          
 
 	  # Tell the runner:
 	  send(
@@ -146,10 +168,15 @@ defmodule Treadmill.Board.Server do
                   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOqwA8XGKxx0RTSmLGVtpWyxkf49B1j+uqNruBRTwem",
                 ],
 		ssh_rendezvous_servers: [%{
+                  # TODO:
 		  client_id: UUID.binary_to_string!(job_id),
 		  server_base_url: "https://sns29.cs.princeton.edu/ssh-rendezvous",
 		  auth_token: "helloworld",
 		}],
+		job_parameters: transform_params(job.parameters),
+		board_parameters: transform_params(job.board.parameters),
+		environment_parameters: transform_params(job.environment.parameters),
+		board_environment_parameters: transform_params(board_env_params),
 	      }
 	    }
 	  )

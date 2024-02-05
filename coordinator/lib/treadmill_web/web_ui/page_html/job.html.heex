@@ -47,7 +47,7 @@
         </tr>
       </table>
     </div>
-    <.form phx-submit="terminate_job" method="post">
+    <.form for={@job_action_form} phx-submit="job_action" method="post">
       <button type="submit" class="text-white bg-red-700 hover:bg-red-800 focus:ring-4 focus:outline-none focus:ring-red-300 font-medium rounded-lg text-sm w-full sm:w-auto px-5 py-2.5 text-center dark:bg-red-600 dark:hover:bg-red-700 dark:focus:ring-red-800">Terminate</button>
     </.form>
   </div>
@@ -61,6 +61,12 @@
 <hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
 <h2 class="mb-4 text-3xl font-bold dark:text-white">Job State</h2>
 TODO: <%= inspect @job_state %>
+
+Job Params: <%= inspect @job_parameters %>
+Board Params: <%= inspect @board_parameters %>
+Environment Params: <%= inspect @environment_parameters %>
+Board Environment Params: <%= inspect @board_environment_parameters %>
+
 
 <hr class="h-px my-8 bg-gray-200 border-0 dark:bg-gray-700">
 <h2 class="mb-4 text-3xl font-bold dark:text-white">Log</h2>

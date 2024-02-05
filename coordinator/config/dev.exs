@@ -8,7 +8,7 @@ config :treadmill, Treadmill.Repo,
   # Relative path to ephemeral PostgreSQL instance socket
   socket_dir: Path.join([
     Path.dirname(__ENV__.file),
-    "..", "..", "default", ".pg",
+    "..", "default", ".pg",
   ]),
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,

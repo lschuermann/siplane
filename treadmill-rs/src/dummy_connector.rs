@@ -1,9 +1,11 @@
-use async_trait::async_trait;
-use log::{error, info};
+use std::collections::HashMap;
 use std::sync::Weak;
+
+use async_trait::async_trait;
+use log::{error, info, warn};
 use uuid::Uuid;
 
-use crate::api::coord_runner::rest as rest_api;
+use crate::api::coord_runner::{rest as rest_api, sse as sse_api};
 use crate::connector::{Runner, RunnerConnector};
 
 pub struct DummyRunnerConnector<R: Runner> {
@@ -39,13 +41,26 @@ impl<R: Runner> RunnerConnector for DummyRunnerConnector<R> {
             "Requesting new job {}, environment: {}, ssh keys: {:?}",
             job_id, self.environment_id, &ssh_keys
         );
-        R::start_job(&runner, job_id, self.environment_id, ssh_keys, vec![]).await;
+        R::start_job(
+            &runner,
+            sse_api::StartJobMessage {
+                job_id,
+                environment_id: self.environment_id,
+                ssh_keys,
+                ssh_rendezvous_servers: vec![],
+                job_parameters: HashMap::new(),
+                board_parameters: HashMap::new(),
+                environment_parameters: HashMap::new(),
+                board_environment_parameters: HashMap::new(),
+            },
+        )
+        .await;
 
         // Wait for SIGINT:
         info!("Job started, waiting for CTRL+C");
         match tokio::signal::ctrl_c().await {
             Ok(()) => {
-                error!("Received CTRL+C, shutting down!");
+                warn!("Received CTRL+C, shutting down!");
             }
             Err(err) => {
                 error!("Unable to listen for shutdown signal: {}", err);
@@ -54,7 +69,7 @@ impl<R: Runner> RunnerConnector for DummyRunnerConnector<R> {
         }
 
         info!("Requesting job {} to stop...", job_id);
-        R::stop_job(&runner, job_id).await;
+        R::stop_job(&runner, sse_api::StopJobMessage { job_id }).await;
 
         info!("Job has stopped, exiting DummyRunnerConnector::run. Goodbye!");
     }

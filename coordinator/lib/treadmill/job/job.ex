@@ -32,8 +32,14 @@ defmodule Treadmill.Job do
     timestamps(type: :utc_datetime)
 
     belongs_to :board, Treadmill.Board
-    belongs_to :environment, Treadmill.Board
+    belongs_to :environment, Treadmill.Environment
     belongs_to :creator, Treadmill.User
+    has_many :parameters, Treadmill.Job.Parameter
+
+    # TODO: This should also expose the board_environment_parameters,
+    # but Ecto doesn't support any composite-key associations yet:
+    # https://github.com/elixir-ecto/ecto/pull/3638. For now, fetch
+    # these via the board_environment_parameters function.
   end
 
   @doc false
@@ -51,6 +57,13 @@ defmodule Treadmill.Job do
     if !is_binary(job_id) || byte_size(job_id) != 16 do
       raise ArgumentError, message: "invalid argument job_id: #{inspect job_id}"
     end
+  end
+
+  def board_environment_parameters(job) do
+    Treadmill.Repo.all(
+      from p in Treadmill.Board.EnvironmentParameter,
+      where: p.board_id == ^job.board_id and p.environment_id == ^job.environment_id
+    )
   end
 
 
@@ -168,27 +181,25 @@ defmodule Treadmill.Job do
     end
   end
 
-  def instant_job(board_id, environment_id, label \\ nil, creator \\ nil) do
+  def instant_job(board_id, environment_id, opts) do
     Treadmill.Board.validate_board_id(board_id)
     # TODO: validate environment ID
 
     creator =
-      if !is_nil(creator) do
-        Ecto.UUID.load!(creator)
-      else
-        nil
+      case Keyword.get(opts, :creator) do
+	nil -> nil
+	creator_id -> Ecto.UUID.load!(creator_id)
       end
 
-    IO.inspect(
-      %Treadmill.Job{
-	start: DateTime.truncate(DateTime.utc_now(), :second),
-	dispatched: false,
-	board_id: Ecto.UUID.load!(board_id),
-	environment_id: Ecto.UUID.load!(environment_id),
-	label: label,
-        creator_id: creator,
-      }
-    )
+    job_parameters =
+      Keyword.get(opts, :job_parameters, %{})
+      |> Enum.map(fn {key, value} ->
+        %Treadmill.Job.Parameter{
+          key: key,
+	  value: value,
+	  secret: false,
+        }
+      end)
 
     job = Treadmill.Repo.insert!(
       %Treadmill.Job{
@@ -196,8 +207,9 @@ defmodule Treadmill.Job do
 	dispatched: false,
 	board_id: Ecto.UUID.load!(board_id),
 	environment_id: Ecto.UUID.load!(environment_id),
-	label: label,
+	label: Keyword.get(opts, :label),
         creator_id: creator,
+	parameters: job_parameters,
       }
     )
 
