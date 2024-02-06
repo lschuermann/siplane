@@ -1614,6 +1614,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial2"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c33d8d4368299f2efb0692053a5abfd8868f72f13ab21213f8b28616c01c6e3c"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "serial2-tokio"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aea38a304b2cd376834de944d202b5664825d60752a2b35037651cbe71bf84f9"
+dependencies = [
+ "libc",
+ "serial2",
+ "tokio",
+ "winapi",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2080,6 +2103,7 @@ dependencies = [
  "nix",
  "rendezvous-proxy",
  "serde",
+ "serial2-tokio",
  "simplelog",
  "tokio",
  "toml",

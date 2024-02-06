@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use clap::Parser;
 use log::{debug, info, warn};
 use serde::Deserialize;
+use serial2_tokio::SerialPort;
 use simplelog::{ColorChoice, Config as SimpleLogConfig, LevelFilter, TermLogger, TerminalMode};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -46,6 +47,12 @@ impl Default for SSHPreferredIPVersion {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+pub struct NetbootRunnerSerialConsoleConfig {
+    path: std::path::PathBuf,
+    baudrate: u32,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct NetbootRunnerEnvironmentConfig {
     // #[serde(default)]
     // init: Option<String>,
@@ -71,6 +78,9 @@ pub struct NetbootRunnerEnvironmentConfig {
     stop_script: Option<PathBuf>,
 
     tcp_control_socket_addr: std::net::SocketAddr,
+
+    #[serde(default)]
+    serial_console: Option<NetbootRunnerSerialConsoleConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -87,8 +97,10 @@ pub struct NetbootRunnerJob {
     _environment_id: Uuid,
     environment_config: NetbootRunnerEnvironmentConfig,
     ssh_keys: Vec<String>,
-    console_streamer_handle: tokio::task::JoinHandle<()>,
-    console_streamer_cmd_chan: tokio::sync::mpsc::Sender<ConsoleStreamerCommand>,
+    console_streamer: Option<(
+        tokio::task::JoinHandle<()>,
+        tokio::sync::mpsc::Sender<ConsoleStreamerCommand>,
+    )>,
     control_socket: TcpControlSocket<NetbootRunner>,
     ssh_rendezvous_proxies: Vec<rendezvous_proxy::RendezvousProxy>,
 }
@@ -242,115 +254,137 @@ impl connector::Runner for NetbootRunner {
             )
             .await;
 
-        let this_streamer = this.clone();
-        let (streamer_chan_tx, mut streamer_chan_rx) = tokio::sync::mpsc::channel(1);
-        let console_streamer = tokio::spawn(async move {
-            // use tokio::io::AsyncReadExt;
-            let _this = this_streamer;
-
-            // Create BufReaders from the file descriptors for streaming:
-            // let mut stdout_reader = tokio::io::BufReader::with_capacity(64 * 1024, stdout);
-            // let mut stderr_reader = tokio::io::BufReader::with_capacity(64 * 1024, stderr);
-
-            // We also allocate buffers (VecDeques) which are used to buffer
-            // output it is acknowledged by the coordinator:
-            let mut _console_queue =
-                std::collections::VecDeque::<(rest_api::StdioFd, Vec<u8>)>::new();
-            let mut _console_queue_offset = 0;
-            let _console_queue_sent = 0;
-
-            // let mut stdout_buf = [0; 64 * 1024];
-            // let mut stdout_closed = false;
-            // let mut stderr_buf = [0; 64 * 1024];
-            // let mut stderr_closed = false;
-
-            enum ReadConsoleRes {
-                // ZeroBytes,
-                // Data,
-                Shutdown,
-                _Error(std::io::Error),
-            }
-
-            loop {
-                // TODO: force buf flush on timeout?
-                #[rustfmt::skip]
-                let res = tokio::select! {
-                    streamer_cmd_opt = streamer_chan_rx.recv() => {
-                        match streamer_cmd_opt {
-                            Some(ConsoleStreamerCommand::Shutdown) => ReadConsoleRes::Shutdown,
-                            None => {
-                                panic!("Streamer command channel TX dropped!");
-                            }
-                        }
-                    }
-
-                    // read_res = stdout_reader.read(&mut stdout_buf), if !stdout_closed => {
-                    //     match read_res {
-                    //         Ok(0) => {
-                    //             // Mark as closed, so we don't loop reading zero bytes:
-                    //             stdout_closed = true;
-                    //             ReadConsoleRes::ZeroBytes
-                    //         },
-                    //         Ok(read_len) => {
-                    //             console_queue.push_back((
-                    //                 rest_api::StdioFd::Stdout,
-                    //                 stdout_buf[..read_len].to_vec()
-                    //             ));
-                    //             ReadConsoleRes::Data
-                    //         }
-                    //         Err(e) => ReadConsoleRes::Error(e),
-                    //     }
-                    // }
-
-                    // read_res = stderr_reader.read(&mut stderr_buf), if !stderr_closed => {
-                    //     match read_res {
-                    //         Ok(0) => {
-                    //             // Mark as closed, so we don't loop reading zero bytes:
-                    //             stderr_closed = true;
-                    //             ReadConsoleRes::ZeroBytes
-                    //         },
-                    //         Ok(read_len) => {
-                    //             console_queue.push_back((
-                    //                 rest_api::StdioFd::Stderr,
-                    //                 stderr_buf[..read_len].to_vec()
-                    //             ));
-                    //             ReadConsoleRes::Data
-                    //         },
-                    //         Err(e) => ReadConsoleRes::Error(e),
-                    //     }
-                    // }
-                };
-
-                match res {
-                    // ReadConsoleRes::Data => {
-                    //     // TODO: this simply assumes that a single buffer
-                    //     // element has been appended to the VecDeque:
-                    //     let (stdio_fd, buf) = console_queue.back().unwrap();
-
-                    //     this.connector
-                    //         .send_job_console_log(
-                    //             msg.job_id,
-                    //             console_queue_offset,
-                    //             console_queue_offset + 1,
-                    //             &[(*stdio_fd, buf.len())],
-                    //             buf.clone(),
-                    //         )
-                    //         .await;
-                    //     console_queue_offset += 1;
-                    // }
-                    ReadConsoleRes::Shutdown => {
-                        // Asked to shut down. Once we implement chunking, do
-                        // one last flush to the coordinator.
-                        debug!("Shutting down console log streamer.");
-                        break;
-                    }
-
-                    ReadConsoleRes::_Error(e) => {
-                        panic!("Error reading process output: {:?}", e);
+        // Connect to the serial port:
+        let console_streamer_handles = if let Some(console_serial_port) = environment_cfg
+            .serial_console
+            .as_ref()
+            .and_then(|serial_console_cfg| {
+                match SerialPort::open(
+                    serial_console_cfg.path.to_str().unwrap(),
+                    serial_console_cfg.baudrate,
+                ) {
+                    Ok(serialport) => Some(serialport),
+                    Err(e) => {
+                        warn!("Unable to open serial port: {:?}", e);
+                        None
                     }
                 }
-            }
-        });
+            }) {
+            let this_streamer = this.clone();
+            let (streamer_chan_tx, mut streamer_chan_rx) = tokio::sync::mpsc::channel(1);
+            let console_streamer = tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let this = this_streamer;
+
+                // Create BufReaders from the file descriptors for streaming:
+                let mut buffered_reader =
+                    tokio::io::BufReader::with_capacity(64 * 1024, console_serial_port);
+
+                // We also allocate buffers (VecDeques) which are used to buffer
+                // output it is acknowledged by the coordinator:
+                let mut console_queue = std::collections::VecDeque::<Vec<u8>>::new();
+                let mut console_queue_offset = 0;
+                let _console_queue_sent = 0;
+
+                let mut read_buf = [0; 64 * 1024];
+                let mut reader_closed = false;
+
+                enum ReadConsoleRes {
+                    ZeroBytes,
+                    Data,
+                    Shutdown,
+                    Error(std::io::Error),
+                }
+
+                loop {
+                    // TODO: force buf flush on timeout?
+                    #[rustfmt::skip]
+                    let res = tokio::select! {
+			streamer_cmd_opt = streamer_chan_rx.recv() => {
+                            match streamer_cmd_opt {
+				Some(ConsoleStreamerCommand::Shutdown) => ReadConsoleRes::Shutdown,
+				None => {
+                                    panic!("Streamer command channel TX dropped!");
+				}
+                            }
+			}
+
+			read_res = buffered_reader.read(&mut read_buf), if !reader_closed => {
+			    match read_res {
+			        Ok(0) => {
+			            // Mark as closed, so we don't loop reading zero bytes:
+			            reader_closed = true;
+			            ReadConsoleRes::ZeroBytes
+			        },
+			        Ok(read_len) => {
+			            console_queue.push_back(
+			                read_buf[..read_len].to_vec()
+			            );
+			            ReadConsoleRes::Data
+			        }
+			        Err(e) => ReadConsoleRes::Error(e),
+			    }
+			}
+
+			// read_res = stderr_reader.read(&mut stderr_buf), if !stderr_closed => {
+			//     match read_res {
+			//         Ok(0) => {
+			//             // Mark as closed, so we don't loop reading zero bytes:
+			//             stderr_closed = true;
+			//             ReadConsoleRes::ZeroBytes
+			//         },
+			//         Ok(read_len) => {
+			//             console_queue.push_back((
+			//                 rest_api::StdioFd::Stderr,
+			//                 stderr_buf[..read_len].to_vec()
+			//             ));
+			//             ReadConsoleRes::Data
+			//         },
+			//         Err(e) => ReadConsoleRes::Error(e),
+			//     }
+			// }
+                    };
+
+                    match res {
+                        ReadConsoleRes::Data => {
+                            // TODO: this simply assumes that a single buffer
+                            // element has been appended to the VecDeque:
+                            let buf = console_queue.back().unwrap();
+
+                            this.connector
+                                .send_job_console_log(
+                                    msg.job_id,
+                                    console_queue_offset,
+                                    console_queue_offset + 1,
+                                    &[(rest_api::StdioFd::Stdout, buf.len())],
+                                    buf.clone(),
+                                )
+                                .await;
+                            console_queue_offset += 1;
+                        }
+
+                        ReadConsoleRes::Shutdown => {
+                            // Asked to shut down. Once we implement chunking, do
+                            // one last flush to the coordinator.
+                            debug!("Shutting down console log streamer.");
+                            break;
+                        }
+
+                        ReadConsoleRes::Error(e) => {
+                            panic!("Error reading from serial port: {:?}", e);
+                        }
+
+                        ReadConsoleRes::ZeroBytes => {
+                            // TODO: still need this case?
+                        }
+                    }
+                }
+            });
+
+            Some((console_streamer, streamer_chan_tx))
+        } else {
+            None
+        };
 
         // TODO: it'd be nice if this didn't have to be
         // sequential. But using tokio's JoinSet we get lifetime
@@ -389,8 +423,7 @@ impl connector::Runner for NetbootRunner {
             _environment_id: msg.environment_id,
             environment_config: environment_cfg.clone(),
             ssh_keys: msg.ssh_keys,
-            console_streamer_handle: console_streamer,
-            console_streamer_cmd_chan: streamer_chan_tx,
+            console_streamer: console_streamer_handles,
             // root_fs_mountpoint: Some(root_fs_mountpoint),
             ssh_rendezvous_proxies,
             control_socket,
@@ -466,18 +499,20 @@ impl connector::Runner for NetbootRunner {
 
         // Instruct the log streamer to shutdown and wait for the last console
         // logs to be posted to the coordinator.
-        debug!("Requesting console streamer to shut down.");
-        job.console_streamer_cmd_chan
-            .send(ConsoleStreamerCommand::Shutdown)
-            .await
-            .expect("Console streamer task has quit before receiving shutdown signal!");
-        job.console_streamer_handle.await.unwrap();
-        debug!("Console streamer has shut down.");
+        if let Some((task_handle, cmd_chan)) = job.console_streamer {
+            debug!("Requesting console streamer to shut down.");
+            cmd_chan
+                .send(ConsoleStreamerCommand::Shutdown)
+                .await
+                .expect("Console streamer task has quit before receiving shutdown signal!");
+            task_handle.await.unwrap();
+            debug!("Console streamer has shut down.");
 
-        // Shut down all rendezvous proxy clients:
-        for proxy in job.ssh_rendezvous_proxies {
-            if let Err(e) = proxy.shutdown().await {
-                warn!("Error while shutting down rendezvous proxy client: {:?}", e);
+            // Shut down all rendezvous proxy clients:
+            for proxy in job.ssh_rendezvous_proxies {
+                if let Err(e) = proxy.shutdown().await {
+                    warn!("Error while shutting down rendezvous proxy client: {:?}", e);
+                }
             }
         }
 
