@@ -849,6 +849,11 @@ impl connector::Runner for NspawnRunner {
     }
 
     async fn stop_job(this: &Arc<Self>, msg: sse_api::StopJobMessage) {
+        // Temporary workaround to avoid deleting the container root file
+        // system. In the future, this should be an option passed from by the
+        // coordinator.
+        const MSG_DELETE_DATA: bool = false;
+
         // This method must not block for long periods of time. We're provided
         // an &Arc<Self> to be able to launch async tasks, while returning
         // immediately. For now, we assume that all actions performed here are
@@ -1017,18 +1022,20 @@ impl connector::Runner for NspawnRunner {
             }
         }
 
-        // If we've created a ZFS file system for this container, destroy it:
-        if let Some(zfs_fs) = job.zfs_root_fs {
-            if let Err(emsg) = this.destroy_zfs_root(&zfs_fs).await {
-                this.connector
-                    .post_job_state(
-                        msg.job_id,
-                        rest_api::JobState::Failed {
-                            status_message: Some(emsg),
-                        },
-                    )
-                    .await;
-                return;
+        if MSG_DELETE_DATA {
+            // If we've created a ZFS file system for this container, destroy it:
+            if let Some(zfs_fs) = job.zfs_root_fs {
+                if let Err(emsg) = this.destroy_zfs_root(&zfs_fs).await {
+                    this.connector
+                        .post_job_state(
+                            msg.job_id,
+                            rest_api::JobState::Failed {
+                                status_message: Some(emsg),
+                            },
+                        )
+                        .await;
+                    return;
+                }
             }
         }
 
