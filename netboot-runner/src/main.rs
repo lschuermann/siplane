@@ -246,22 +246,26 @@ impl connector::Runner for NetbootRunner {
 
         // Run init script, if we have one:
         if let Some(init_script) = &environment_cfg.init_script {
-            Command::new(init_script)
+            info!("Running init_script {:?}...", init_script);
+            let out = Command::new(init_script)
                 .env("TML_JOB_ID", msg.job_id.to_string())
                 .output()
                 .await
                 .expect("Failed running init_script command");
+            info!("Ran init_script: {:?}", out);
         } else {
             warn!("No init_script provided, skipping!");
         }
 
         // Run start script, if we have one:
         if let Some(start_script) = &environment_cfg.start_script {
-            Command::new(start_script)
+            info!("Running start_script {:?}...", start_script);
+            let out = Command::new(start_script)
                 .env("TML_JOB_ID", msg.job_id.to_string())
                 .output()
                 .await
                 .expect("Failed running start_script command");
+            info!("Ran start_script: {:?}", out);
         } else {
             warn!("No start_script provided, skipping!");
         }
