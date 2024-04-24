@@ -10,6 +10,7 @@ use log::{debug, info, warn};
 use serde::Deserialize;
 use serial2_tokio::SerialPort;
 use simplelog::{ColorChoice, Config as SimpleLogConfig, LevelFilter, TermLogger, TerminalMode};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -70,6 +71,8 @@ pub struct NetbootRunnerEnvironmentConfig {
     ssh_port: Option<u16>,
     #[serde(default)]
     ssh_preferred_ip_version: SSHPreferredIPVersion,
+    #[serde(default)]
+    init_script: Option<PathBuf>,
     #[serde(default)]
     reset_script: Option<PathBuf>,
     #[serde(default)]
@@ -241,7 +244,27 @@ impl connector::Runner for NetbootRunner {
             }
         }
 
-        // TODO: run start script.
+        // Run init script, if we have one:
+        if let Some(init_script) = &environment_cfg.init_script {
+            Command::new(init_script)
+                .env("TML_JOB_ID", msg.job_id.to_string())
+                .output()
+                .await
+                .expect("Failed running init_script command");
+        } else {
+            warn!("No init_script provided, skipping!");
+        }
+
+        // Run start script, if we have one:
+        if let Some(start_script) = &environment_cfg.start_script {
+            Command::new(start_script)
+                .env("TML_JOB_ID", msg.job_id.to_string())
+                .output()
+                .await
+                .expect("Failed running start_script command");
+        } else {
+            warn!("No start_script provided, skipping!");
+        }
 
         // All resources have been allocated, mark the target as booting:
         this.connector
